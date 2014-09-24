@@ -191,13 +191,8 @@ impl Flow for TableWrapperFlow {
     }
 
     fn assign_block_size<'a>(&mut self, ctx: &'a LayoutContext<'a>) {
-        if self.is_float() {
-            debug!("assign_block_size_float: assigning block_size for floated table_wrapper");
-            self.block_flow.assign_block_size_float(ctx);
-        } else {
-            debug!("assign_block_size: assigning block_size for table_wrapper");
-            self.assign_block_size_table_wrapper_base(ctx);
-        }
+        debug!("assign_block_size: assigning block_size for table_wrapper");
+        self.assign_block_size_table_wrapper_base(ctx);
     }
 
     fn compute_absolute_position(&mut self) {
