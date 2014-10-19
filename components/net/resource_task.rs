@@ -173,6 +173,43 @@ pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
     setup_chan
 }
 
+pub type SnifferTask = Sender<ControlMsg>;
+
+pub fn new_sniffer_task() -> SnifferTask {
+  let(a, b) = channel();
+  let builder = TaskBuilder::new().named("SnifferManager");
+  builder.spawn(proc(){
+    SnifferManager::new(1).start();
+  });
+}
+
+struct SnifferManager {
+  from_client: Receiver<ControlMsg>,
+}
+
+impl SnifferManager {
+  fn new(from_client: Receiver <ControlMsg>) -> SnifferManager {
+    SnifferManager {
+      from_client: from_client,
+    }
+  }
+}
+
+impl SnifferManager {
+  fn start(&self) {
+    loop {
+      match self.from_client.recv() {
+        Load(load_data, start_chan) => {
+          self.load(load_data, start_chan)
+        }
+        Exit => {
+          break
+        }
+      }
+    }
+  }
+}
+
 struct ResourceManager {
     from_client: Receiver<ControlMsg>,
     user_agent: Option<String>,
