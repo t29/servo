@@ -5,15 +5,10 @@
 //! A task that sniffs data
 use std::comm::{channel, Receiver, Sender};
 use std::task::TaskBuilder;
-use resource_task::{LoadData};
+use resource_task::{SnifferData};
 
-// use http::headers::content_type::MediaType;
-// use http::headers::response::HeaderCollection as ResponseHeaderCollection;
-// use http::headers::request::HeaderCollection as RequestHeaderCollection;
-// use http::method::{Method, Get};
-// use url::Url;
 
-pub type SnifferTask = Sender<LoadData>;
+pub type SnifferTask = Sender<SnifferData>;
 
 pub fn new_sniffer_task() -> SnifferTask {
   let(sen, rec) = channel();
@@ -21,14 +16,15 @@ pub fn new_sniffer_task() -> SnifferTask {
   builder.spawn(proc(){
     SnifferManager::new(rec).start();
   });
+  sen
 }
 
 struct SnifferManager {
-  data_receiver: Receiver<LoadData>,
+  data_receiver: Receiver<SnifferData>,
 }
 
 impl SnifferManager {
-  fn new(data_receiver: Receiver <LoadData>) -> SnifferManager {
+  fn new(data_receiver: Receiver <SnifferData>) -> SnifferManager {
     SnifferManager {
       data_receiver: data_receiver,
     }
@@ -38,21 +34,12 @@ impl SnifferManager {
 impl SnifferManager {
   fn start(&self) {
     loop {
-      let (load_data, start_chan) = self.data_receiver.recv();
-      self.load(load_data, start_chan);
-
-      // match self.data_receiver.recv() {
-      //   Load(load_data, start_chan) => {
-      //
-      //   }
-      //   Exit => {
-      //     break
-      //   }
-      // }
+      let snif_data = self.data_receiver.recv();
+      self.load(snif_data);
     }
   }
 
-  fn load(&self, load_data: LoadData, start_chan: Sender<LoadData>) {
-    start_chan.send(load_data);
+  fn load(&self, snif_data: SnifferData) {
+    snif_data.tx.send(snif_data.load_data);
   }
 }
