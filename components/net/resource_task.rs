@@ -218,8 +218,9 @@ impl ResourceManager {
         // end of the pipe, receive all the data.
         let (tx, rx) = channel();
         let sniffer_task = sniffer_task::new_sniffer_task();
-        sniffer_task.send(SnifferData { load_data: load_data, tx: tx } );
+        sniffer_task.send(sniffer_task::Load(SnifferData { load_data: load_data, tx: tx } ));
         load_data = rx.recv();
+        sniffer_task.send(sniffer_task::Exit);
 
         let loader = match load_data.url.scheme.as_slice() {
             "file" => file_loader::factory,

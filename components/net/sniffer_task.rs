@@ -7,8 +7,12 @@ use std::comm::{channel, Receiver, Sender};
 use std::task::TaskBuilder;
 use resource_task::{SnifferData};
 
+pub enum SnifferControlMsg {
+    Load(SnifferData),
+    Exit
+}
 
-pub type SnifferTask = Sender<SnifferData>;
+pub type SnifferTask = Sender<SnifferControlMsg>;
 
 pub fn new_sniffer_task() -> SnifferTask {
   let(sen, rec) = channel();
@@ -20,11 +24,11 @@ pub fn new_sniffer_task() -> SnifferTask {
 }
 
 struct SnifferManager {
-  data_receiver: Receiver<SnifferData>,
+  data_receiver: Receiver<SnifferControlMsg>,
 }
 
 impl SnifferManager {
-  fn new(data_receiver: Receiver <SnifferData>) -> SnifferManager {
+  fn new(data_receiver: Receiver <SnifferControlMsg>) -> SnifferManager {
     SnifferManager {
       data_receiver: data_receiver,
     }
@@ -34,8 +38,15 @@ impl SnifferManager {
 impl SnifferManager {
   fn start(&self) {
     loop {
-      let snif_data = self.data_receiver.recv();
-      self.load(snif_data);
+      // case
+      match self.data_receiver.recv() {
+        Load(snif_data) => {
+          self.load(snif_data);
+        }
+        Exit => {
+          break
+        }
+      }
     }
   }
 
