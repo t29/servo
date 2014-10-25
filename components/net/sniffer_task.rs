@@ -5,30 +5,25 @@
 //! A task that sniffs data
 use std::comm::{channel, Receiver, Sender};
 use std::task::TaskBuilder;
-use resource_task::{SnifferData};
+use resource_task::{LoadResponse};
 
-pub enum SnifferControlMsg {
-    Load(SnifferData),
-    Exit
-}
+pub type SnifferTask = Sender<LoadResponse>;
 
-pub type SnifferTask = Sender<SnifferControlMsg>;
-
-pub fn new_sniffer_task() -> SnifferTask {
+pub fn new_sniffer_task(next_rx: Sender<LoadResponse>) -> SnifferTask {
   let(sen, rec) = channel();
   let builder = TaskBuilder::new().named("SnifferManager");
   builder.spawn(proc(){
-    SnifferManager::new(rec).start();
+    SnifferManager::new(rec).start(next_rx);
   });
   sen
 }
 
 struct SnifferManager {
-  data_receiver: Receiver<SnifferControlMsg>,
+  data_receiver: Receiver<LoadResponse>,
 }
 
 impl SnifferManager {
-  fn new(data_receiver: Receiver <SnifferControlMsg>) -> SnifferManager {
+  fn new(data_receiver: Receiver <LoadResponse>) -> SnifferManager {
     SnifferManager {
       data_receiver: data_receiver,
     }
@@ -36,21 +31,13 @@ impl SnifferManager {
 }
 
 impl SnifferManager {
-  fn start(&self) {
+  fn start(&self, next_rx: Sender<LoadResponse>) {
     loop {
-      // case
-      match self.data_receiver.recv() {
-        Load(snif_data) => {
-          self.load(snif_data);
-        }
-        Exit => {
-          break
-        }
-      }
+      self.load(next_rx.clone(), self.data_receiver.recv());
     }
   }
 
-  fn load(&self, snif_data: SnifferData) {
-    snif_data.tx.send(snif_data.load_data);
+  fn load(&self, next_rx: Sender<LoadResponse>, snif_data: LoadResponse) {
+    next_rx.send(snif_data);
   }
 }
