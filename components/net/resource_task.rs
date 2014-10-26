@@ -216,11 +216,8 @@ impl ResourceManager {
         // Create new communication channel, create new sniffer task,
         // send all the data to the new sniffer task with the send
         // end of the pipe, receive all the data.
-        let (tx, rx) = channel();
-        let sniffer_task = sniffer_task::new_sniffer_task();
-        sniffer_task.send(sniffer_task::Load(SnifferData { load_data: load_data, tx: tx } ));
-        load_data = rx.recv();
-        sniffer_task.send(sniffer_task::Exit);
+
+        let sniffer_task = sniffer_task::new_sniffer_task(start_chan.clone());
 
         let loader = match load_data.url.scheme.as_slice() {
             "file" => file_loader::factory,
@@ -235,7 +232,8 @@ impl ResourceManager {
             }
         };
         debug!("resource_task: loading url: {:s}", load_data.url.serialize());
-        loader(load_data, start_chan);
+
+        loader(load_data, sniffer_task);
     }
 }
 
