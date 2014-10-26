@@ -179,12 +179,6 @@ struct ResourceManager {
     user_agent: Option<String>,
 }
 
-pub struct SnifferData {
-  pub load_data: LoadData,
-  pub tx: Sender<LoadData>
-}
-
-
 impl ResourceManager {
     fn new(from_client: Receiver<ControlMsg>, user_agent: Option<String>) -> ResourceManager {
         ResourceManager {
