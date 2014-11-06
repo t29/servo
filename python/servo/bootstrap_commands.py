@@ -16,6 +16,17 @@ from mach.decorators import (
 
 from servo.command_base import CommandBase, cd, host_triple
 
+class PanickyUrlOpener(urllib.FancyURLopener):
+  def http_error_default(self, url, fp, errcode, errmsg, headers):
+    print("Download failed (%d): %s - %s" % (errcode, errmsg, url))
+
+    cpu_type = subprocess.check_output(["uname", "-m"]).strip().lower()
+    if errcode == 404 and cpu_type in ["i386", "i486", "i686", "i768", "x86"]:
+        # i686
+        print("Note: Servo does not currently bootstrap 32bit snapshots of Rust")
+        print("See https://github.com/servo/servo/issues/3899")
+
+    sys.exit(1)
 
 def download(desc, src, dst):
     recved = [0]
@@ -28,7 +39,7 @@ def download(desc, src, dst):
 
     print("Downloading %s..." % desc)
     dumb = os.environ.get("TERM") == "dumb"
-    urllib.urlretrieve(src, dst, None if dumb else report)
+    PanickyUrlOpener().retrieve(src, dst, None if dumb else report)
     if not dumb:
         print()
 
@@ -108,7 +119,7 @@ class MachCommands(CommandBase):
 
         tgz_file = "cargo-nightly-%s.tar.gz" % host_triple()
         # FIXME(#3582): use https.
-        nightly_url = "http://static.rust-lang.org/cargo-dist/2014-10-02/%s" % tgz_file
+        nightly_url = "http://static.rust-lang.org/cargo-dist/2014-10-21/%s" % tgz_file
 
         download("Cargo nightly", nightly_url, tgz_file)
 

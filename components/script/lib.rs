@@ -5,7 +5,7 @@
 #![comment = "The Servo Parallel Browser Project"]
 #![license = "MPL"]
 
-#![feature(globs, macro_rules, struct_variant, phase, unsafe_destructor)]
+#![feature(default_type_params, globs, macro_rules, struct_variant, phase, unsafe_destructor)]
 
 #![deny(unused_imports, unused_variable)]
 #![allow(non_snake_case)]
@@ -91,6 +91,7 @@ pub mod dom {
     pub mod domrectlist;
     pub mod comment;
     pub mod console;
+    mod create;
     pub mod customevent;
     pub mod dedicatedworkerglobalscope;
     pub mod document;
@@ -211,9 +212,7 @@ pub mod dom {
     pub mod testbinding;
 }
 
-pub mod parse {
-    pub mod html;
-}
+pub mod parse;
 
 pub mod layout_interface;
 pub mod page;

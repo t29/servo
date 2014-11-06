@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull;
 use dom::bindings::codegen::Bindings::XMLHttpRequestBinding;
 use dom::bindings::codegen::Bindings::XMLHttpRequestBinding::XMLHttpRequestMethods;
@@ -45,18 +46,17 @@ use libc::c_void;
 
 use net::resource_task::{ResourceTask, ResourceCORSData, Load, LoadData, Payload, Done};
 use cors::{allow_cross_origin_request, CORSRequest, CORSMode, ForcedPreflightMode};
-use script_task::{ScriptChan, XHRProgressMsg};
+use script_task::{ScriptChan, XHRProgressMsg, XHRReleaseMsg};
 use servo_util::str::DOMString;
 use servo_util::task::spawn_named;
 
 use std::ascii::StrAsciiExt;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::comm::{Sender, Receiver, channel};
 use std::default::Default;
 use std::io::{BufReader, MemWriter, Timer};
 use std::from_str::FromStr;
 use std::path::BytesContainer;
-use std::task::TaskBuilder;
 use std::time::duration::Duration;
 use std::num::Zero;
 use time;
@@ -83,24 +83,41 @@ enum XMLHttpRequestState {
     XHRDone = 4, // So as not to conflict with the ProgressMsg `Done`
 }
 
+#[deriving(PartialEq)]
+#[jstraceable]
+pub struct GenerationId(uint);
+
 pub enum XHRProgress {
     /// Notify that headers have been received
-    HeadersReceivedMsg(Option<ResponseHeaderCollection>, Status),
+    HeadersReceivedMsg(GenerationId, Option<ResponseHeaderCollection>, Status),
     /// Partial progress (after receiving headers), containing portion of the response
-    LoadingMsg(ByteString),
+    LoadingMsg(GenerationId, ByteString),
     /// Loading is done
-    DoneMsg,
-    /// There was an error (Abort or Timeout). For a network or other error, just pass None
-    ErroredMsg(Option<Error>),
-    /// Timeout was reached
-    TimeoutMsg
+    DoneMsg(GenerationId),
+    /// There was an error (only Abort, Timeout or Network is used)
+    ErroredMsg(GenerationId, Error),
+}
+
+impl XHRProgress {
+    fn generation_id(&self) -> GenerationId {
+        match *self {
+            HeadersReceivedMsg(id, _, _) |
+            LoadingMsg(id, _) |
+            DoneMsg(id) |
+            ErroredMsg(id, _) => id
+        }
+    }
 }
 
 enum SyncOrAsync<'a> {
     Sync(JSRef<'a, XMLHttpRequest>),
-    Async(TrustedXHRAddress, ScriptChan)
+    Async(TrustedXHRAddress, &'a ScriptChan)
 }
 
+enum TerminateReason {
+    AbortedOrReopened,
+    TimedOut,
+}
 
 #[dom_struct]
 pub struct XMLHttpRequest {
@@ -111,16 +128,16 @@ pub struct XMLHttpRequest {
     upload: JS<XMLHttpRequestUpload>,
     response_url: DOMString,
     status: Cell<u16>,
-    status_text: RefCell<ByteString>,
-    response: RefCell<ByteString>,
+    status_text: DOMRefCell<ByteString>,
+    response: DOMRefCell<ByteString>,
     response_type: Cell<XMLHttpRequestResponseType>,
     response_xml: MutNullableJS<Document>,
-    response_headers: RefCell<ResponseHeaderCollection>,
+    response_headers: DOMRefCell<ResponseHeaderCollection>,
 
     // Associated concepts
-    request_method: RefCell<Method>,
-    request_url: RefCell<Option<Url>>,
-    request_headers: RefCell<RequestHeaderCollection>,
+    request_method: DOMRefCell<Method>,
+    request_url: DOMRefCell<Option<Url>>,
+    request_headers: DOMRefCell<RequestHeaderCollection>,
     request_body_len: Cell<uint>,
     sync: Cell<bool>,
     upload_complete: Cell<bool>,
@@ -129,10 +146,10 @@ pub struct XMLHttpRequest {
 
     global: GlobalField,
     pinned_count: Cell<uint>,
-    timer: RefCell<Timer>,
+    timer: DOMRefCell<Timer>,
     fetch_time: Cell<i64>,
-    timeout_pinned: Cell<bool>,
-    terminate_sender: RefCell<Option<Sender<Error>>>,
+    terminate_sender: DOMRefCell<Option<Sender<TerminateReason>>>,
+    generation_id: Cell<GenerationId>,
 }
 
 impl XMLHttpRequest {
@@ -145,15 +162,15 @@ impl XMLHttpRequest {
             upload: JS::from_rooted(XMLHttpRequestUpload::new(global)),
             response_url: "".to_string(),
             status: Cell::new(0),
-            status_text: RefCell::new(ByteString::new(vec!())),
-            response: RefCell::new(ByteString::new(vec!())),
+            status_text: DOMRefCell::new(ByteString::new(vec!())),
+            response: DOMRefCell::new(ByteString::new(vec!())),
             response_type: Cell::new(_empty),
             response_xml: Default::default(),
-            response_headers: RefCell::new(ResponseHeaderCollection::new()),
+            response_headers: DOMRefCell::new(ResponseHeaderCollection::new()),
 
-            request_method: RefCell::new(Get),
-            request_url: RefCell::new(None),
-            request_headers: RefCell::new(RequestHeaderCollection::new()),
+            request_method: DOMRefCell::new(Get),
+            request_url: DOMRefCell::new(None),
+            request_headers: DOMRefCell::new(RequestHeaderCollection::new()),
             request_body_len: Cell::new(0),
             sync: Cell::new(false),
             send_flag: Cell::new(false),
@@ -163,10 +180,10 @@ impl XMLHttpRequest {
 
             global: GlobalField::from_rooted(global),
             pinned_count: Cell::new(0),
-            timer: RefCell::new(Timer::new().unwrap()),
+            timer: DOMRefCell::new(Timer::new().unwrap()),
             fetch_time: Cell::new(0),
-            timeout_pinned: Cell::new(false),
-            terminate_sender: RefCell::new(None),
+            terminate_sender: DOMRefCell::new(None),
+            generation_id: Cell::new(GenerationId(0))
         }
     }
     pub fn new(global: &GlobalRef) -> Temporary<XMLHttpRequest> {
@@ -178,108 +195,157 @@ impl XMLHttpRequest {
         Ok(XMLHttpRequest::new(global))
     }
 
-    pub fn handle_xhr_progress(addr: TrustedXHRAddress, progress: XHRProgress) {
+    pub fn handle_progress(addr: TrustedXHRAddress, progress: XHRProgress) {
         unsafe {
             let xhr = JS::from_trusted_xhr_address(addr).root();
             xhr.process_partial_response(progress);
         }
     }
 
+    pub fn handle_release(addr: TrustedXHRAddress) {
+        addr.release_once();
+    }
+
     fn fetch(fetch_type: &SyncOrAsync, resource_task: ResourceTask,
-             mut load_data: LoadData, terminate_receiver: Receiver<Error>,
-             cors_request: Result<Option<CORSRequest>,()>) -> ErrorResult {
+             mut load_data: LoadData, terminate_receiver: Receiver<TerminateReason>,
+             cors_request: Result<Option<CORSRequest>,()>, gen_id: GenerationId) -> ErrorResult {
+
         fn notify_partial_progress(fetch_type: &SyncOrAsync, msg: XHRProgress) {
             match *fetch_type {
                 Sync(xhr) => {
                     xhr.process_partial_response(msg);
                 },
-                Async(addr, ref script_chan) => {
+                Async(addr, script_chan) => {
                     let ScriptChan(ref chan) = *script_chan;
                     chan.send(XHRProgressMsg(addr, msg));
                 }
             }
         }
 
-        match cors_request {
-            Err(_) => return Err(Network), // Happens in case of cross-origin non-http URIs
-            Ok(Some(ref req)) => {
-                let response = req.http_fetch();
-                if response.network_error {
-                    return Err(Network)
-                } else {
-                    load_data.cors = Some(ResourceCORSData {
-                        preflight: req.preflight_flag,
-                        origin: req.origin.clone()
-                    })
+
+        macro_rules! notify_error_and_return(
+            ($err:expr) => ({
+                notify_partial_progress(fetch_type, ErroredMsg(gen_id, $err));
+                return Err($err)
+            });
+        )
+
+        macro_rules! terminate(
+            ($reason:expr) => (
+                match $reason {
+                    AbortedOrReopened => {
+                        return Err(Abort)
+                    }
+                    TimedOut => {
+                        notify_error_and_return!(Timeout);
+                    }
                 }
-            },
+            );
+        )
+
+
+        match cors_request {
+            Err(_) => {
+                // Happens in case of cross-origin non-http URIs
+                notify_error_and_return!(Network);
+            }
+
+            Ok(Some(ref req)) => {
+                let (chan, cors_port) = channel();
+                let req2 = req.clone();
+                // TODO: this exists only to make preflight check non-blocking
+                // perhaps shoud be handled by the resource_loader?
+                spawn_named("XHR:Cors", proc() {
+                    let response = req2.http_fetch();
+                    chan.send(response);
+                });
+
+                select! (
+                    response = cors_port.recv() => {
+                        if response.network_error {
+                            notify_error_and_return!(Network);
+                        } else {
+                            load_data.cors = Some(ResourceCORSData {
+                                preflight: req.preflight_flag,
+                                origin: req.origin.clone()
+                            });
+                        }
+                    },
+                    reason = terminate_receiver.recv() => terminate!(reason)
+                )
+            }
             _ => {}
         }
 
         // Step 10, 13
         let (start_chan, start_port) = channel();
         resource_task.send(Load(load_data, start_chan));
-        let response = start_port.recv();
-        match terminate_receiver.try_recv() {
-            Ok(e) => return Err(e),
-            _ => {}
-        }
-        match cors_request {
-            Ok(Some(ref req)) => {
-                    match response.metadata.headers {
-                        Some(ref h) if allow_cross_origin_request(req, h) => {},
-                        _ => return Err(Network)
-                    }
-            },
-            _ => {}
-        }
-        // XXXManishearth Clear cache entries in case of a network error
 
-        notify_partial_progress(fetch_type, HeadersReceivedMsg(
-            response.metadata.headers.clone(), response.metadata.status.clone()));
+
+        let progress_port;
+        select! (
+            response = start_port.recv() => {
+                match cors_request {
+                    Ok(Some(ref req)) => {
+                        match response.metadata.headers {
+                            Some(ref h) if allow_cross_origin_request(req, h) => {},
+                            _ => notify_error_and_return!(Network)
+                        }
+                    },
+
+                    _ => {}
+                };
+                // XXXManishearth Clear cache entries in case of a network error
+                notify_partial_progress(fetch_type, HeadersReceivedMsg(gen_id,
+                    response.metadata.headers.clone(), response.metadata.status.clone()));
+
+                progress_port = response.progress_port;
+            },
+            reason = terminate_receiver.recv() => terminate!(reason)
+        )
+
         let mut buf = vec!();
         loop {
-            let progress = response.progress_port.recv();
+            // Under most circumstances, progress_port will contain lots of Payload
+            // events. Since select! does not have any fairness or priority, it
+            // might always remove the progress_port event, even when there is
+            // a terminate event waiting in the terminate_receiver. If this happens,
+            // a timeout or abort will take too long to be processed. To avoid this,
+            // in each iteration, we check for a terminate event before we block.
             match terminate_receiver.try_recv() {
-                Ok(e) => return Err(e),
-                _ => {}
-            }
-            match progress {
-                Payload(data) => {
-                    buf.push_all(data.as_slice());
-                    notify_partial_progress(fetch_type, LoadingMsg(ByteString::new(buf.clone())));
+                Ok(reason) => terminate!(reason),
+                Err(_) => ()
+            };
+
+            select! (
+                progress = progress_port.recv() => match progress {
+                    Payload(data) => {
+                        buf.push_all(data.as_slice());
+                        notify_partial_progress(fetch_type,
+                                                LoadingMsg(gen_id, ByteString::new(buf.clone())));
+                    },
+                    Done(Ok(()))  => {
+                        notify_partial_progress(fetch_type, DoneMsg(gen_id));
+                        return Ok(());
+                    },
+                    Done(Err(_))  => {
+                        notify_error_and_return!(Network);
+                    }
                 },
-                Done(Ok(()))  => {
-                    notify_partial_progress(fetch_type, DoneMsg);
-                    return Ok(());
-                },
-                Done(Err(_))  => {
-                    notify_partial_progress(fetch_type, ErroredMsg(None));
-                    return Err(Network)
-                }
-            }
+                reason = terminate_receiver.recv() => terminate!(reason)
+            )
         }
     }
 }
 
 impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
-    fn GetOnreadystatechange(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("readystatechange")
-    }
-
-    fn SetOnreadystatechange(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("readystatechange", listener)
-    }
+    event_handler!(readystatechange, GetOnreadystatechange, SetOnreadystatechange)
 
     fn ReadyState(self) -> u16 {
         self.ready_state.get() as u16
     }
 
     fn Open(self, method: ByteString, url: DOMString) -> ErrorResult {
-        // Clean up from previous requests, if any:
-        self.cancel_timeout();
         let uppercase_method = method.as_str().map(|s| {
             let upper = s.to_ascii_upper();
             match upper.as_slice() {
@@ -319,7 +385,9 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
                         return Err(InvalidAccess)
                     }
                 }
-                // XXXManishearth abort existing requests
+                // abort existing requests
+                self.terminate_ongoing_fetch();
+
                 // Step 12
                 *self.request_url.borrow_mut() = Some(parsed_url);
                 *self.request_headers.borrow_mut() = RequestHeaderCollection::new();
@@ -461,15 +529,8 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
             Some (ref v) if v.len() == 0 => true,
             _ => false
         });
-        let mut addr = None;
-        if !self.sync.get() {
-            // If one of the event handlers below aborts the fetch,
-            // the assertion in release_once() will fail since we haven't pinned it yet.
-            // Pin early to avoid dealing with this
-            unsafe {
-                addr = Some(self.to_trusted());
-            }
 
+        if !self.sync.get() {
             // Step 8
             let upload_target = *self.upload.root();
             let event_target: JSRef<EventTarget> = EventTargetCast::from_ref(upload_target);
@@ -479,15 +540,20 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
 
             // Step 9
             self.send_flag.set(true);
+            // If one of the event handlers below aborts the fetch by calling
+            // abort or open we will need the current generation id to detect it.
+            let gen_id = self.generation_id.get();
             self.dispatch_response_progress_event("loadstart".to_string());
+            if self.generation_id.get() != gen_id {
+                return Ok(());
+            }
             if !self.upload_complete.get() {
                 self.dispatch_upload_progress_event("loadstart".to_string(), Some(0));
+                if self.generation_id.get() != gen_id {
+                    return Ok(());
+                }
             }
-        }
 
-        if self.ready_state.get() == Unsent {
-            // The progress events above might have run abort(), in which case we terminate the fetch.
-            return Ok(());
         }
 
         let global = self.global.root();
@@ -552,16 +618,30 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
             _ => {}
         }
 
+        let gen_id = self.generation_id.get();
         if self.sync.get() {
             return XMLHttpRequest::fetch(&mut Sync(self), resource_task, load_data,
-                                         terminate_receiver, cors_request);
+                                         terminate_receiver, cors_request, gen_id);
         } else {
-            let builder = TaskBuilder::new().named("XHRTask");
             self.fetch_time.set(time::now().to_timespec().sec);
             let script_chan = global.root_ref().script_chan().clone();
-            builder.spawn(proc() {
-                let _ = XMLHttpRequest::fetch(&mut Async(addr.unwrap(), script_chan),
-                                              resource_task, load_data, terminate_receiver, cors_request);
+            // Pin the object before launching the fetch task.
+            // The XHRReleaseMsg sent when the fetch task completes will
+            // unpin it. This is to ensure that the object will stay alive
+            // as long as there are (possibly cancelled) inflight events queued up
+            // in the script task's port
+            let addr = unsafe {
+                self.to_trusted()
+            };
+            spawn_named("XHRTask", proc() {
+                let _ = XMLHttpRequest::fetch(&mut Async(addr, &script_chan),
+                                              resource_task,
+                                              load_data,
+                                              terminate_receiver,
+                                              cors_request,
+                                              gen_id);
+                let ScriptChan(ref chan) = script_chan;
+                chan.send(XHRReleaseMsg(addr));
             });
             let timeout = self.timeout.get();
             if timeout > 0 {
@@ -571,12 +651,19 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
         Ok(())
     }
     fn Abort(self) {
-        self.terminate_sender.borrow().as_ref().map(|s| s.send_opt(Abort));
-        match self.ready_state.get() {
-            Opened if self.send_flag.get() => self.process_partial_response(ErroredMsg(Some(Abort))),
-            HeadersReceived | Loading => self.process_partial_response(ErroredMsg(Some(Abort))),
-            _ => {}
-        };
+        self.terminate_ongoing_fetch();
+        let state = self.ready_state.get();
+        if (state == Opened && self.send_flag.get()) ||
+           state == HeadersReceived ||
+           state == Loading {
+            let gen_id = self.generation_id.get();
+            self.process_partial_response(ErroredMsg(gen_id, Abort));
+            // If open was called in one of the handlers invoked by the
+            // above call then we should terminate the abort sequence
+            if self.generation_id.get() != gen_id {
+                return
+            }
+        }
         self.ready_state.set(Unsent);
     }
     fn ResponseURL(self) -> DOMString {
@@ -701,6 +788,7 @@ trait PrivateXMLHttpRequestHelpers {
     fn release_once(self);
     fn change_ready_state(self, XMLHttpRequestState);
     fn process_partial_response(self, progress: XHRProgress);
+    fn terminate_ongoing_fetch(self);
     fn insert_trusted_header(self, name: String, value: String);
     fn dispatch_progress_event(self, upload: bool, type_: DOMString, loaded: u64, total: Option<u64>);
     fn dispatch_upload_progress_event(self, type_: DOMString, partial_load: Option<u64>);
@@ -751,8 +839,24 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
     }
 
     fn process_partial_response(self, progress: XHRProgress) {
+        let msg_id = progress.generation_id();
+
+        // Aborts processing if abort() or open() was called
+        // (including from one of the event handlers called below)
+        macro_rules! return_if_fetch_was_terminated(
+            () => (
+                if msg_id != self.generation_id.get() {
+                    return
+                }
+            );
+        )
+
+        // Ignore message if it belongs to a terminated fetch
+        return_if_fetch_was_terminated!();
+
         match progress {
-            HeadersReceivedMsg(headers, status) => {
+            HeadersReceivedMsg(_, headers, status) => {
+                assert!(self.ready_state.get() == Opened);
                 // For synchronous requests, this should not fire any events, and just store data
                 // XXXManishearth Find a way to track partial progress of the send (onprogresss for XHRUpload)
 
@@ -762,8 +866,11 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
                 // Substeps 2-4
                 if !self.sync.get() {
                     self.dispatch_upload_progress_event("progress".to_string(), None);
+                    return_if_fetch_was_terminated!();
                     self.dispatch_upload_progress_event("load".to_string(), None);
+                    return_if_fetch_was_terminated!();
                     self.dispatch_upload_progress_event("loadend".to_string(), None);
+                    return_if_fetch_was_terminated!();
                 }
                 // Part of step 13, send() (processing response)
                 // XXXManishearth handle errors, if any (substep 1)
@@ -777,27 +884,25 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
                     None => {}
                 };
                 // Substep 3
-                if self.ready_state.get() == Opened && !self.sync.get() {
+                if !self.sync.get() {
                     self.change_ready_state(HeadersReceived);
                 }
             },
-            LoadingMsg(partial_response) => {
+            LoadingMsg(_, partial_response) => {
                 // For synchronous requests, this should not fire any events, and just store data
                 // Part of step 13, send() (processing response body)
                 // XXXManishearth handle errors, if any (substep 1)
 
-                // Substep 2
-                if self.ready_state.get() == HeadersReceived && !self.sync.get() {
-                    self.change_ready_state(Loading);
-                }
-                // Substep 3
                 *self.response.borrow_mut() = partial_response;
-                // Substep 4
                 if !self.sync.get() {
+                    if self.ready_state.get() == HeadersReceived {
+                        self.change_ready_state(Loading);
+                        return_if_fetch_was_terminated!();
+                    }
                     self.dispatch_response_progress_event("progress".to_string());
                 }
             },
-            DoneMsg => {
+            DoneMsg(_) => {
                 // Part of step 13, send() (processing response end of file)
                 // XXXManishearth handle errors, if any (substep 1)
 
@@ -806,48 +911,50 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
                     // Subsubsteps 2-4
                     self.send_flag.set(false);
                     self.change_ready_state(XHRDone);
-
+                    return_if_fetch_was_terminated!();
                     // Subsubsteps 5-7
                     self.dispatch_response_progress_event("progress".to_string());
+                    return_if_fetch_was_terminated!();
                     self.dispatch_response_progress_event("load".to_string());
+                    return_if_fetch_was_terminated!();
                     self.dispatch_response_progress_event("loadend".to_string());
                 }
-                self.cancel_timeout();
-                self.release_once();
             },
-            ErroredMsg(e) => {
+            ErroredMsg(_, e) => {
                 self.send_flag.set(false);
                 // XXXManishearth set response to NetworkError
                 self.change_ready_state(XHRDone);
+                return_if_fetch_was_terminated!();
+
                 let errormsg = match e {
-                    Some(Abort) => "abort",
-                    Some(Timeout) => "timeout",
-                    None => "error",
-                    _ => unreachable!()
+                    Abort => "abort",
+                    Timeout => "timeout",
+                    _ => "error",
                 };
 
                 let upload_complete: &Cell<bool> = &self.upload_complete;
                 if !upload_complete.get() {
                     upload_complete.set(true);
                     self.dispatch_upload_progress_event("progress".to_string(), None);
+                    return_if_fetch_was_terminated!();
                     self.dispatch_upload_progress_event(errormsg.to_string(), None);
+                    return_if_fetch_was_terminated!();
                     self.dispatch_upload_progress_event("loadend".to_string(), None);
+                    return_if_fetch_was_terminated!();
                 }
                 self.dispatch_response_progress_event("progress".to_string());
+                return_if_fetch_was_terminated!();
                 self.dispatch_response_progress_event(errormsg.to_string());
+                return_if_fetch_was_terminated!();
                 self.dispatch_response_progress_event("loadend".to_string());
-
-                self.cancel_timeout();
-                self.release_once();
-            },
-            TimeoutMsg => {
-                match self.ready_state.get() {
-                    Opened if self.send_flag.get() => self.process_partial_response(ErroredMsg(Some(Timeout))),
-                    Loading | HeadersReceived => self.process_partial_response(ErroredMsg(Some(Timeout))),
-                    _ => self.release_once()
-                };
             }
         }
+    }
+
+    fn terminate_ongoing_fetch(self) {
+        let GenerationId(prev_id) = self.generation_id.get();
+        self.generation_id.set(GenerationId(prev_id + 1));
+        self.terminate_sender.borrow().as_ref().map(|s| s.send_opt(AbortedOrReopened));
     }
 
     fn insert_trusted_header(self, name: String, value: String) {
@@ -895,23 +1002,11 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
         // This will cancel all previous timeouts
         let oneshot = self.timer.borrow_mut()
                           .oneshot(Duration::milliseconds(timeout as i64));
-        let addr = unsafe {
-            self.to_trusted() // This will increment the pin counter by one
-        };
-        if self.timeout_pinned.get() {
-            // Already pinned due to a timeout, no need to pin it again since the old timeout was cancelled above
-            self.release_once();
-        }
-        self.timeout_pinned.set(true);
-        let global = self.global.root();
-        let script_chan = global.root_ref().script_chan().clone();
         let terminate_sender = (*self.terminate_sender.borrow()).clone();
         spawn_named("XHR:Timer", proc () {
             match oneshot.recv_opt() {
                 Ok(_) => {
-                    let ScriptChan(ref chan) = script_chan;
-                    terminate_sender.map(|s| s.send_opt(Timeout));
-                    chan.send(XHRProgressMsg(addr, TimeoutMsg));
+                    terminate_sender.map(|s| s.send_opt(TimedOut));
                 },
                 Err(_) => {
                     // This occurs if xhr.timeout (the sender) goes out of scope (i.e, xhr went out of scope)
@@ -922,15 +1017,12 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
         }
     );
     }
+
     fn cancel_timeout(self) {
-        // Cancels timeouts on the object, if any
-        if self.timeout_pinned.get() {
-            self.timeout_pinned.set(false);
-            self.release_once();
-        }
         // oneshot() closes the previous channel, canceling the timeout
         self.timer.borrow_mut().oneshot(Zero::zero());
     }
+
     fn text_response(self) -> DOMString {
         let mut encoding = UTF_8 as EncodingRef;
         match self.response_headers.borrow().content_type {

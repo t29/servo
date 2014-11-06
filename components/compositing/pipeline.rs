@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use CompositorChan;
+use CompositorProxy;
 use layout_traits::{LayoutTaskFactory, LayoutControlChan};
 use script_traits::{ScriptControlChan, ScriptTaskFactory};
 use script_traits::{AttachLayoutMsg, LoadMsg, NewLayoutInfo, ExitPipelineMsg};
@@ -15,7 +15,6 @@ use servo_msg::constellation_msg::{LoadData, WindowSizeData};
 use servo_net::image_cache_task::ImageCacheTask;
 use gfx::font_cache_task::FontCacheTask;
 use servo_net::resource_task::ResourceTask;
-use servo_util::opts::Opts;
 use servo_util::time::TimeProfilerChan;
 use std::rc::Rc;
 
@@ -48,14 +47,13 @@ impl Pipeline {
                       id: PipelineId,
                       subpage_id: Option<SubpageId>,
                       constellation_chan: ConstellationChan,
-                      compositor_chan: CompositorChan,
+                      compositor_proxy: Box<CompositorProxy+'static+Send>,
                       devtools_chan: Option<DevtoolsControlChan>,
                       image_cache_task: ImageCacheTask,
                       font_cache_task: FontCacheTask,
                       resource_task: ResourceTask,
                       time_profiler_chan: TimeProfilerChan,
                       window_size: WindowSizeData,
-                      opts: Opts,
                       script_pipeline: Option<Rc<Pipeline>>,
                       load_data: LoadData)
                       -> Pipeline {
@@ -75,7 +73,7 @@ impl Pipeline {
                 let (script_chan, script_port) = channel();
                 ScriptTaskFactory::create(None::<&mut STF>,
                                           id,
-                                          box compositor_chan.clone(),
+                                          compositor_proxy.clone_compositor_proxy(),
                                           &layout_pair,
                                           ScriptControlChan(script_chan.clone()),
                                           script_port,
@@ -103,11 +101,10 @@ impl Pipeline {
 
         RenderTask::create(id,
                            render_port,
-                           compositor_chan.clone(),
+                           compositor_proxy,
                            constellation_chan.clone(),
                            font_cache_task.clone(),
                            failure.clone(),
-                           opts.clone(),
                            time_profiler_chan.clone(),
                            render_shutdown_chan);
 
@@ -122,7 +119,6 @@ impl Pipeline {
                                   resource_task,
                                   image_cache_task,
                                   font_cache_task,
-                                  opts.clone(),
                                   time_profiler_chan,
                                   layout_shutdown_chan);
 

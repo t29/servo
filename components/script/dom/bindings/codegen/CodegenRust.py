@@ -2526,9 +2526,9 @@ class CGGenericGetter(CGAbstractBindingMethod):
         if lenientThis:
             name = "genericLenientGetter"
             unwrapFailureCode = (
-                "MOZ_ASSERT(!JS_IsExceptionPending(cx));\n"
-                "JS_SET_RVAL(cx, vp, JS::UndefinedValue());\n"
-                "return true;")
+                "assert!(JS_IsExceptionPending(cx) == 0);\n"
+                "*vp = UndefinedValue();\n"
+                "return 1;")
         else:
             name = "genericGetter"
             unwrapFailureCode = None
@@ -2600,8 +2600,8 @@ class CGGenericSetter(CGAbstractBindingMethod):
         if lenientThis:
             name = "genericLenientSetter"
             unwrapFailureCode = (
-                "MOZ_ASSERT(!JS_IsExceptionPending(cx));\n"
-                "return true;")
+                "assert!(JS_IsExceptionPending(cx) == 0);\n"
+                "return 1;")
         else:
             name = "genericSetter"
             unwrapFailureCode = None
@@ -3611,7 +3611,7 @@ class CGDOMJSProxyHandler_getOwnPropertyDescriptor(CGAbstractExternMethod):
                    "}\n")
 
         if indexedSetter or self.descriptor.operations['NamedSetter']:
-            setOrIndexedGet += "if set != 0 {\n"
+            setOrIndexedGet += "if set {\n"
             if indexedSetter:
                 setOrIndexedGet += ("  if index.is_some() {\n" +
                                     "    let index = index.unwrap();\n")
@@ -3622,7 +3622,7 @@ class CGDOMJSProxyHandler_getOwnPropertyDescriptor(CGAbstractExternMethod):
                                     "    return true;\n" +
                                     "  }\n")
             if self.descriptor.operations['NamedSetter']:
-                setOrIndexedGet += "  if RUST_JSID_IS_STRING(id) {\n"
+                setOrIndexedGet += "  if RUST_JSID_IS_STRING(id) != 0 {\n"
                 if not 'NamedCreator' in self.descriptor.operations:
                     # FIXME need to check that this is a 'supported property name'
                     assert False
@@ -3683,7 +3683,7 @@ class CGDOMJSProxyHandler_defineProperty(CGAbstractExternMethod):
     def __init__(self, descriptor):
         args = [Argument('*mut JSContext', 'cx'), Argument('*mut JSObject', 'proxy'),
                 Argument('jsid', 'id'),
-                Argument('*const JSPropertyDescriptor', 'desc')]
+                Argument('*mut JSPropertyDescriptor', 'desc')]
         CGAbstractExternMethod.__init__(self, descriptor, "defineProperty", "bool", args)
         self.descriptor = descriptor
     def getBody(self):
@@ -3720,7 +3720,7 @@ class CGDOMJSProxyHandler_defineProperty(CGAbstractExternMethod):
                     CGIndenter(CGProxyNamedSetter(self.descriptor)).define() + "\n" +
                     "}\n")
         elif self.descriptor.operations['NamedGetter']:
-            set += ("if RUST_JSID_IS_STRING(id) {\n" +
+            set += ("if RUST_JSID_IS_STRING(id) != 0 {\n" +
                     "  let name = jsid_to_str(cx, id);\n" +
                     "  let this = UnwrapProxy(proxy);\n" +
                     "  let this = JS::from_raw(this);\n" +
@@ -4136,11 +4136,11 @@ class CGDescriptor(CGThing):
         if hasGetter:
             cgThings.append(CGGenericGetter(descriptor))
         if hasLenientGetter:
-            pass
+            cgThings.append(CGGenericGetter(descriptor, lenientThis=True))
         if hasSetter:
             cgThings.append(CGGenericSetter(descriptor))
         if hasLenientSetter:
-            pass
+            cgThings.append(CGGenericSetter(descriptor, lenientThis=True))
 
         if descriptor.concrete:
             cgThings.append(CGClassFinalizeHook(descriptor))
@@ -4177,6 +4177,7 @@ class CGDescriptor(CGThing):
                 cgThings.append(CGDOMJSProxyHandler_obj_toString(descriptor))
                 cgThings.append(CGDOMJSProxyHandler_get(descriptor))
                 cgThings.append(CGDOMJSProxyHandler_hasOwn(descriptor))
+
                 if descriptor.operations['IndexedSetter'] or descriptor.operations['NamedSetter']:
                     cgThings.append(CGDOMJSProxyHandler_defineProperty(descriptor))
 

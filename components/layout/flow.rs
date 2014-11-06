@@ -31,8 +31,8 @@ use context::LayoutContext;
 use floats::Floats;
 use flow_list::{FlowList, FlowListIterator, MutFlowListIterator};
 use flow_ref::FlowRef;
-use fragment::{Fragment, TableRowFragment, TableCellFragment};
-use incremental::{RestyleDamage, Reflow};
+use fragment::{Fragment, FragmentBoundsIterator, TableRowFragment, TableCellFragment};
+use incremental::{ReconstructFlow, Reflow, ReflowOutOfFlow, RestyleDamage};
 use inline::InlineFlow;
 use model::{CollapsibleMargins, IntrinsicISizes, MarginCollapseInfo};
 use parallel::FlowParallelInfo;
@@ -62,6 +62,8 @@ use std::raw;
 use std::sync::atomics::{AtomicUint, SeqCst};
 use std::slice::MutItems;
 use style::computed_values::{clear, float, position, text_align};
+use style::ComputedValues;
+use sync::Arc;
 
 /// Virtual methods that make up a float context.
 ///
@@ -199,6 +201,7 @@ pub trait Flow: fmt::Show + ToString + Sync {
         let impacted = base(&*self).flags.impacted_by_floats();
         if impacted {
             self.assign_block_size(layout_context);
+            mut_base(&mut *self).restyle_damage.remove(ReflowOutOfFlow | Reflow);
         }
         impacted
     }
@@ -208,14 +211,11 @@ pub trait Flow: fmt::Show + ToString + Sync {
         // The default implementation is a no-op.
     }
 
-    /// Returns the direction that this flow clears floats in, if any.
-    fn float_clearance(&self) -> clear::T {
-        clear::none
-    }
+    /// Phase 5 of reflow: builds display lists.
+    fn build_display_list(&mut self, layout_context: &LayoutContext);
 
-    fn float_kind(&self) -> float::T {
-        float::none
-    }
+    /// Perform an iteration of fragment bounds on this flow.
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator);
 
     fn compute_collapsible_block_start_margin(&mut self,
                                               _layout_context: &mut LayoutContext,
@@ -257,15 +257,11 @@ pub trait Flow: fmt::Show + ToString + Sync {
     }
 
     fn is_positioned(&self) -> bool {
-        self.is_relatively_positioned() || self.is_absolutely_positioned()
+        self.is_relatively_positioned() || base(self).flags.is_absolutely_positioned()
     }
 
     fn is_relatively_positioned(&self) -> bool {
         self.positioning() == position::relative
-    }
-
-    fn is_absolutely_positioned(&self) -> bool {
-        self.positioning() == position::absolute || self.is_fixed()
     }
 
     /// Return true if this is the root of an absolute flow tree.
@@ -299,6 +295,10 @@ pub trait Flow: fmt::Show + ToString + Sync {
             LayerId(pointer, fragment_id)
         }
     }
+
+    /// Attempts to perform incremental fixup of this flow by replacing its fragment's style with
+    /// the new style. This can only succeed if the flow has exactly one fragment.
+    fn repair_style(&mut self, new_style: &Arc<ComputedValues>);
 }
 
 impl<'a, E, S: Encoder<E>> Encodable<S, E> for &'a Flow + 'a {
@@ -421,9 +421,6 @@ pub trait MutableFlowUtils {
     /// Computes the overflow region for this flow.
     fn store_overflow(self, _: &LayoutContext);
 
-    /// Builds the display lists for this flow.
-    fn build_display_list(self, layout_context: &LayoutContext);
-
     /// Gathers static block-offsets bubbled up by kids.
     ///
     /// This essentially gives us offsets of all absolutely positioned direct descendants and all
@@ -433,12 +430,6 @@ pub trait MutableFlowUtils {
     /// So, kids have their flow origin already set. In the case of absolute flow kids, they have
     /// their hypothetical box position already set.
     fn collect_static_block_offsets_from_children(self);
-
-    fn propagate_restyle_damage(self);
-
-    /// At the moment, reflow isn't idempotent. This function resets this flow
-    /// (and all its descendants, recursively), and marks them as needing reflow.
-    fn nonincremental_reset(self);
 }
 
 pub trait MutableOwnedFlowUtils {
@@ -489,48 +480,77 @@ pub trait PostorderFlowTraversal {
 
 /// Flags used in flows, tightly packed to save space.
 #[deriving(Clone, Encodable)]
-pub struct FlowFlags(pub u8);
+pub struct FlowFlags(pub u16);
 
 /// The bitmask of flags that represent the `has_left_floated_descendants` and
 /// `has_right_floated_descendants` fields.
 ///
 /// NB: If you update this field, you must update the bitfields below.
-static HAS_FLOATED_DESCENDANTS_BITMASK: u8 = 0b0000_0011;
+static HAS_FLOATED_DESCENDANTS_BITMASK: u16 = 0b0000_0000_0000_0011;
 
 // Whether this flow has descendants that float left in the same block formatting context.
-bitfield!(FlowFlags, has_left_floated_descendants, set_has_left_floated_descendants, 0b0000_0001)
+bitfield!(FlowFlags,
+          has_left_floated_descendants,
+          set_has_left_floated_descendants,
+          0b0000_0000_0000_0001)
 
 // Whether this flow has descendants that float right in the same block formatting context.
-bitfield!(FlowFlags, has_right_floated_descendants, set_has_right_floated_descendants, 0b0000_0010)
+bitfield!(FlowFlags,
+          has_right_floated_descendants,
+          set_has_right_floated_descendants,
+          0b0000_0000_0000_0010)
 
 // Whether this flow is impacted by floats to the left in the same block formatting context (i.e.
 // its block-size depends on some prior flows with `float: left`).
-bitfield!(FlowFlags, impacted_by_left_floats, set_impacted_by_left_floats, 0b0000_0100)
+bitfield!(FlowFlags,
+          impacted_by_left_floats,
+          set_impacted_by_left_floats,
+          0b0000_0000_0000_0100)
 
 // Whether this flow is impacted by floats to the right in the same block formatting context (i.e.
 // its block-size depends on some prior flows with `float: right`).
-bitfield!(FlowFlags, impacted_by_right_floats, set_impacted_by_right_floats, 0b0000_1000)
+bitfield!(FlowFlags, impacted_by_right_floats, set_impacted_by_right_floats, 0b0000_0000_0000_1000)
 
 /// The bitmask of flags that represent the text alignment field.
 ///
 /// NB: If you update this field, you must update the bitfields below.
-static TEXT_ALIGN_BITMASK: u8 = 0b0011_0000;
+static TEXT_ALIGN_BITMASK: u16 = 0b0000_0000_0011_0000;
 
 /// The number of bits we must shift off to handle the text alignment field.
 ///
 /// NB: If you update this field, you must update the bitfields below.
-static TEXT_ALIGN_SHIFT: u8 = 4;
+static TEXT_ALIGN_SHIFT: u16 = 4;
 
 // Whether this flow contains a flow that has its own layer within the same absolute containing
 // block.
 bitfield!(FlowFlags,
           layers_needed_for_descendants,
           set_layers_needed_for_descendants,
-          0b0100_0000)
+          0b0000_0000_0100_0000)
 
 // Whether this flow must have its own layer. Even if this flag is not set, it might get its own
 // layer if it's deemed to be likely to overlap flows with their own layer.
-bitfield!(FlowFlags, needs_layer, set_needs_layer, 0b1000_0000)
+bitfield!(FlowFlags, needs_layer, set_needs_layer, 0b0000_0000_1000_0000)
+
+// Whether this flow is absolutely positioned. This is checked all over layout, so a virtual call
+// is too expensive.
+bitfield!(FlowFlags, is_absolutely_positioned, set_is_absolutely_positioned, 0b0000_0001_0000_0000)
+
+// Whether this flow is left-floated. This is checked all over layout, so a virtual call is too
+// expensive.
+bitfield!(FlowFlags, floats_left, set_floats_left, 0b0000_0010_0000_0000)
+
+// Whether this flow is right-floated. This is checked all over layout, so a virtual call is too
+// expensive.
+bitfield!(FlowFlags, floats_right, set_floats_right, 0b0000_0100_0000_0000)
+
+// Whether this flow clears to the left. This is checked all over layout, so a virtual call is too
+// expensive.
+bitfield!(FlowFlags, clears_left, set_clears_left, 0b0000_1000_0000_0000)
+
+// Whether this flow clears to the right. This is checked all over layout, so a virtual call is too
+// expensive.
+bitfield!(FlowFlags, clears_right, set_clears_right, 0b0001_0000_0000_0000)
 
 impl FlowFlags {
     /// Creates a new set of flow flags.
@@ -549,13 +569,13 @@ impl FlowFlags {
     #[inline]
     pub fn text_align(self) -> text_align::T {
         let FlowFlags(ff) = self;
-        FromPrimitive::from_u8((ff & TEXT_ALIGN_BITMASK) >> TEXT_ALIGN_SHIFT as uint).unwrap()
+        FromPrimitive::from_u16((ff & TEXT_ALIGN_BITMASK) >> TEXT_ALIGN_SHIFT as uint).unwrap()
     }
 
     #[inline]
     pub fn set_text_align(&mut self, value: text_align::T) {
         let FlowFlags(ff) = *self;
-        *self = FlowFlags((ff & !TEXT_ALIGN_BITMASK) | ((value as u8) << TEXT_ALIGN_SHIFT as uint))
+        *self = FlowFlags((ff & !TEXT_ALIGN_BITMASK) | ((value as u16) << TEXT_ALIGN_SHIFT as uint))
     }
 
     #[inline]
@@ -575,6 +595,22 @@ impl FlowFlags {
     #[inline]
     pub fn impacted_by_floats(&self) -> bool {
         self.impacted_by_left_floats() || self.impacted_by_right_floats()
+    }
+
+    #[inline]
+    pub fn float_kind(&self) -> float::T {
+        if self.floats_left() {
+            float::left
+        } else if self.floats_right() {
+            float::right
+        } else {
+            float::none
+        }
+    }
+
+    #[inline]
+    pub fn clears_floats(&self) -> bool {
+        self.clears_left() || self.clears_right()
     }
 }
 
@@ -601,6 +637,10 @@ impl Descendants {
 
     pub fn len(&self) -> uint {
         self.descendant_links.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.descendant_links.is_empty()
     }
 
     pub fn push(&mut self, given_descendant: FlowRef) {
@@ -765,10 +805,11 @@ pub struct BaseFlow {
     /// Any layers that we're bubbling up, in a linked list.
     pub layers: DList<RenderLayer>,
 
+    /// The writing mode for this flow.
+    pub writing_mode: WritingMode,
+
     /// Various flags for flows, tightly packed to save space.
     pub flags: FlowFlags,
-
-    pub writing_mode: WritingMode,
 }
 
 impl fmt::Show for BaseFlow {
@@ -812,21 +853,47 @@ impl Drop for BaseFlow {
 
 impl BaseFlow {
     #[inline]
-    pub fn new(node: ThreadSafeLayoutNode) -> BaseFlow {
-        let writing_mode = node.style().writing_mode;
+    pub fn new(node: Option<ThreadSafeLayoutNode>, writing_mode: WritingMode) -> BaseFlow {
+        let mut flags = FlowFlags::new();
+        match node {
+            None => {}
+            Some(node) => {
+                let node_style = node.style();
+                match node_style.get_box().position {
+                    position::absolute | position::fixed => {
+                        flags.set_is_absolutely_positioned(true)
+                    }
+                    _ => {}
+                }
+                match node_style.get_box().float {
+                    float::none => {}
+                    float::left => flags.set_floats_left(true),
+                    float::right => flags.set_floats_right(true),
+                }
+                match node_style.get_box().clear {
+                    clear::none => {}
+                    clear::left => flags.set_clears_left(true),
+                    clear::right => flags.set_clears_right(true),
+                    clear::both => {
+                        flags.set_clears_left(true);
+                        flags.set_clears_right(true);
+                    }
+                }
+            }
+        }
+
+        // New flows start out as fully damaged.
+        let mut damage = RestyleDamage::all();
+        damage.remove(ReconstructFlow);
+
         BaseFlow {
             ref_count: AtomicUint::new(1),
-
-            restyle_damage: node.restyle_damage(),
-
+            restyle_damage: damage,
             children: FlowList::new(),
-
             intrinsic_inline_sizes: IntrinsicISizes::new(),
             position: LogicalRect::zero(writing_mode),
             overflow: LogicalRect::zero(writing_mode),
-
             parallel: FlowParallelInfo::new(),
-
             floats: Floats::new(writing_mode),
             collapsible_margins: CollapsibleMargins::new(),
             abs_position: Zero::zero(),
@@ -840,8 +907,7 @@ impl BaseFlow {
             layers: DList::new(),
             absolute_position_info: AbsolutePositionInfo::new(writing_mode),
             clip_rect: Rect(Zero::zero(), Size2D(Au(0), Au(0))),
-
-            flags: FlowFlags::new(),
+            flags: flags,
             writing_mode: writing_mode,
         }
     }
@@ -857,6 +923,36 @@ impl BaseFlow {
     pub fn debug_id(&self) -> uint {
         let p = self as *const _;
         p as uint
+    }
+
+    pub fn validate_display_list_geometry(&self) {
+        let position_with_overflow = self.position.union(&self.overflow);
+        let bounds = Rect(self.abs_position,
+                          Size2D(position_with_overflow.size.inline,
+                                 position_with_overflow.size.block));
+
+        for item in self.display_list.iter() {
+            let paint_bounds = match item.base().bounds.intersection(&item.base().clip_rect) {
+                None => continue,
+                Some(rect) => rect,
+            };
+
+            if paint_bounds.is_empty() {
+                continue;
+            }
+
+            if bounds.union(&paint_bounds) != bounds {
+                error!("DisplayList item {} outside of Flow overflow ({})", item, paint_bounds);
+            }
+        }
+    }
+
+    pub fn child_fragment_absolute_position(&self, fragment: &Fragment) -> Point2D<Au> {
+        let relative_offset =
+            fragment.relative_position(&self
+                                       .absolute_position_info
+                                       .relative_containing_block_size);
+        self.abs_position.add_size(&relative_offset.to_physical(self.writing_mode))
     }
 }
 
@@ -1022,7 +1118,7 @@ impl<'a> ImmutableFlowUtils for &'a Flow + 'a {
             indent.push_str("| ")
         }
 
-        error!("{}+ {}", indent, self.to_string());
+        println!("{}+ {}", indent, self.to_string());
 
         for kid in imm_child_iter(self) {
             kid.dump_with_level(level + 1)
@@ -1088,40 +1184,6 @@ impl<'a> MutableFlowUtils for &'a mut Flow + 'a {
         mut_base(self).overflow = overflow;
     }
 
-    /// Push display items for current flow and its descendants onto the appropriate display lists
-    /// of the given stacking context.
-    ///
-    /// Arguments:
-    ///
-    /// * `builder`: The display list builder, which contains information used during the entire
-    ///   display list building pass.
-    ///
-    /// * `info`: Per-flow display list building information.
-    fn build_display_list(self, layout_context: &LayoutContext) {
-        debug!("Flow: building display list");
-        match self.class() {
-            BlockFlowClass => self.as_block().build_display_list_block(layout_context),
-            InlineFlowClass => self.as_inline().build_display_list_inline(layout_context),
-            TableWrapperFlowClass => {
-                self.as_table_wrapper().build_display_list_table_wrapper(layout_context)
-            }
-            TableFlowClass => self.as_table().build_display_list_table(layout_context),
-            TableRowGroupFlowClass => {
-                self.as_table_rowgroup().build_display_list_table_rowgroup(layout_context)
-            }
-            TableRowFlowClass => self.as_table_row().build_display_list_table_row(layout_context),
-            TableCaptionFlowClass => {
-                self.as_table_caption().build_display_list_table_caption(layout_context)
-            }
-            TableCellFlowClass => {
-                self.as_table_cell().build_display_list_table_cell(layout_context)
-            }
-            TableColGroupFlowClass => {
-                // Nothing to do here, as column groups don't render.
-            }
-        }
-    }
-
     /// Collect and update static y-offsets bubbled up by kids.
     ///
     /// This would essentially give us offsets of all absolutely positioned
@@ -1137,7 +1199,7 @@ impl<'a> MutableFlowUtils for &'a mut Flow + 'a {
             let mut gives_absolute_offsets = true;
             if kid.is_block_like() {
                 let kid_block = kid.as_block();
-                if kid_block.is_fixed() || kid_block.is_absolutely_positioned() {
+                if kid_block.is_fixed() || kid_block.base.flags.is_absolutely_positioned() {
                     // It won't contribute any offsets for descendants because it would be the
                     // containing block for them.
                     gives_absolute_offsets = false;
@@ -1166,86 +1228,6 @@ impl<'a> MutableFlowUtils for &'a mut Flow + 'a {
             }
         }
         mut_base(self).abs_descendants.static_block_offsets = absolute_descendant_block_offsets
-    }
-
-    fn propagate_restyle_damage(self) {
-        struct DirtyFloats {
-            left:  bool,
-            right: bool,
-        }
-
-        fn doit(flow: &mut Flow, down: RestyleDamage, dirty_floats: &mut DirtyFloats) -> RestyleDamage {
-            match flow.float_clearance() {
-                clear::none  => {}
-                clear::left  => {
-                    (*dirty_floats).left  = false;
-                }
-                clear::right => {
-                    (*dirty_floats).right = false;
-                }
-                clear::both  => {
-                    (*dirty_floats).left  = false;
-                    (*dirty_floats).right = false;
-                }
-            }
-
-            match flow.float_kind() {
-                float::none  => {}
-                float::left  => {
-                    (*dirty_floats).left  = true;
-                }
-                float::right => {
-                    (*dirty_floats).right = true;
-                }
-            }
-
-            let mut my_damage = mut_base(flow).restyle_damage;
-            my_damage.insert(down);
-
-            if (*dirty_floats).left || (*dirty_floats).right {
-                my_damage = RestyleDamage::all();
-            }
-
-            let down_damage = my_damage.propagate_down();
-
-            for kid in child_iter(flow) {
-                my_damage.insert(doit(kid, down_damage, dirty_floats));
-            }
-
-            mut_base(flow).restyle_damage = my_damage;
-
-            my_damage.propagate_up()
-        }
-
-        doit(self, RestyleDamage::empty(), &mut DirtyFloats { left: false, right: false });
-    }
-
-    fn nonincremental_reset(self) {
-        fn reset_flow(flow: &mut Flow) {
-            let base = mut_base(flow);
-
-            if !base.restyle_damage.contains(Reflow) {
-                return
-            }
-
-            let writing_mode = base.writing_mode;
-
-            base.position               = LogicalRect::zero(writing_mode);
-            base.overflow               = LogicalRect::zero(writing_mode);
-            base.floats                 = Floats::new(writing_mode);
-            base.collapsible_margins    = CollapsibleMargins::new();
-            base.abs_position           = Zero::zero();
-            base.block_container_explicit_block_size = None;
-            base.display_list           = DisplayList::new();
-            base.layers                 = DList::new();
-            base.absolute_position_info = AbsolutePositionInfo::new(writing_mode);
-        }
-
-        reset_flow(self);
-
-        for child in child_iter(self) {
-            child.nonincremental_reset();
-        }
     }
 }
 

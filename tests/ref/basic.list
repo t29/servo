@@ -1,3 +1,4 @@
+== case-insensitive-font-family.html case-insensitive-font-family-ref.html
 != img_simple.html img_simple_ref.html
 == basic_width_px.html basic_width_em.html
 == br.html br-ref.html
@@ -15,7 +16,7 @@
 == first_of_type_pseudo_a.html first_of_type_pseudo_b.html
 == last_of_type_pseudo_a.html last_of_type_pseudo_b.html
 == only_of_type_pseudo_a.html only_of_type_pseudo_b.html
-# visibility_hidden.html visibility_hidden_ref.html
+== visibility_hidden.html visibility_hidden_ref.html
 == root_height_a.html root_height_b.html
 == png_rgba_colorspace_a.html png_rgba_colorspace_b.html
 == border_style_none_a.html border_style_none_b.html
@@ -39,7 +40,7 @@
 == block_image.html 500x300_green.html
 != block_image.html noteq_500x300_white.html
 == object_element_a.html object_element_b.html
-== append_style_a.html append_style_b.html
+flaky_cpu == append_style_a.html append_style_b.html
 == height_compute_reset.html height_compute.html
 == width_nonreplaced_block_simple_a.html width_nonreplaced_block_simple_b.html
 == max_width_float_simple_a.html max_width_float_simple_b.html

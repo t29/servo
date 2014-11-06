@@ -8,14 +8,16 @@ use css::node_style::StyledNode;
 use css::matching::{ApplicableDeclarations, CannotShare, MatchMethods, StyleWasShared};
 use construct::FlowConstructor;
 use context::LayoutContext;
-use flow::{Flow, MutableFlowUtils, PreorderFlowTraversal, PostorderFlowTraversal};
+use flow::{Flow, MutableFlowUtils};
+use flow::{PreorderFlowTraversal, PostorderFlowTraversal};
 use flow;
-use incremental::RestyleDamage;
+use incremental::{RestyleDamage, BubbleISizes, Reflow, ReflowOutOfFlow};
 use wrapper::{layout_node_to_unsafe_layout_node, LayoutNode};
 use wrapper::{PostorderNodeMutTraversal, ThreadSafeLayoutNode, UnsafeLayoutNode};
 use wrapper::{PreorderDomTraversal, PostorderDomTraversal};
 
 use servo_util::bloom::BloomFilter;
+use servo_util::opts;
 use servo_util::tid::tid;
 use style::TNode;
 
@@ -132,9 +134,10 @@ impl<'a> PreorderDomTraversal for RecalcStyleForNode<'a> {
         // Just needs to be wrapped in an option for `match_node`.
         let some_bf = Some(bf);
 
-        if node.is_dirty() || node.has_dirty_siblings() {
-            // Remove existing CSS styles from changed nodes, to force
-            // non-incremental reflow.
+        let nonincremental_layout = opts::get().nonincremental_layout;
+        if nonincremental_layout || node.is_dirty() {
+            // Remove existing CSS styles from nodes whose content has changed (e.g. text changed),
+            // to force non-incremental reflow.
             if node.has_changed() {
                 let node = ThreadSafeLayoutNode::new(&node);
                 node.unstyle();
@@ -159,7 +162,9 @@ impl<'a> PreorderDomTraversal for RecalcStyleForNode<'a> {
                                         &some_bf,
                                         &mut applicable_declarations,
                                         &mut shareable);
-                   }
+                    } else {
+                        ThreadSafeLayoutNode::new(&node).set_restyle_damage(RestyleDamage::all())
+                    }
 
                     // Perform the CSS cascade.
                     unsafe {
@@ -173,7 +178,10 @@ impl<'a> PreorderDomTraversal for RecalcStyleForNode<'a> {
                         style_sharing_candidate_cache.insert_if_possible(&node);
                     }
                 }
-                StyleWasShared(index) => style_sharing_candidate_cache.touch(index),
+                StyleWasShared(index, damage) => {
+                    style_sharing_candidate_cache.touch(index);
+                    ThreadSafeLayoutNode::new(&node).set_restyle_damage(damage);
+                }
             }
         }
 
@@ -203,18 +211,16 @@ impl<'a> PostorderDomTraversal for ConstructFlows<'a> {
         {
             let tnode = ThreadSafeLayoutNode::new(&node);
 
-            // Always re-construct if incremental layout is turned off.
-            if !self.layout_context.shared.opts.incremental_layout {
-                unsafe {
-                    node.set_dirty_descendants(true);
-                }
-            }
-
-            if node.has_dirty_descendants() {
-                tnode.set_restyle_damage(RestyleDamage::all());
+            // Always reconstruct if incremental layout is turned off.
+            let nonincremental_layout = opts::get().nonincremental_layout;
+            if nonincremental_layout || node.has_dirty_descendants() {
                 let mut flow_constructor = FlowConstructor::new(self.layout_context);
-                flow_constructor.process(&tnode);
-                debug!("Constructed flow for {:x}: {:x}", tnode.debug_id(), tnode.flow_debug_id());
+                if nonincremental_layout || !flow_constructor.repair_if_possible(&tnode) {
+                    flow_constructor.process(&tnode);
+                    debug!("Constructed flow for {:x}: {:x}",
+                           tnode.debug_id(),
+                           tnode.flow_debug_id());
+                }
             }
 
             // Reset the layout damage in this node. It's been propagated to the
@@ -264,7 +270,7 @@ impl PreorderFlow for FlowTreeVerification {
     fn process(&mut self, flow: &mut Flow) {
         let base = flow::base(flow);
         if !base.flags.is_leaf() && !base.flags.is_nonleaf() {
-            println("flow tree verification failed: flow wasn't a leaf or a nonleaf!");
+            println!("flow tree verification failed: flow wasn't a leaf or a nonleaf!");
             flow.dump();
             fail!("flow tree verification failed")
         }
@@ -281,6 +287,12 @@ impl<'a> PostorderFlowTraversal for BubbleISizes<'a> {
     #[inline]
     fn process(&self, flow: &mut Flow) {
         flow.bubble_inline_sizes();
+        flow::mut_base(flow).restyle_damage.remove(BubbleISizes);
+    }
+
+    #[inline]
+    fn should_process(&self, flow: &mut Flow) -> bool {
+        flow::base(flow).restyle_damage.contains(BubbleISizes)
     }
 }
 
@@ -293,6 +305,11 @@ impl<'a> PreorderFlowTraversal for AssignISizes<'a> {
     #[inline]
     fn process(&self, flow: &mut Flow) {
         flow.assign_inline_sizes(self.layout_context);
+    }
+
+    #[inline]
+    fn should_process(&self, flow: &mut Flow) -> bool {
+        flow::base(flow).restyle_damage.intersects(ReflowOutOfFlow | Reflow)
     }
 }
 
@@ -307,7 +324,15 @@ pub struct AssignBSizesAndStoreOverflow<'a> {
 impl<'a> PostorderFlowTraversal for AssignBSizesAndStoreOverflow<'a> {
     #[inline]
     fn process(&self, flow: &mut Flow) {
+        // Can't do anything with flows impacted by floats until we reach their inorder parent.
+        // NB: We must return without resetting the restyle bits for these, as we haven't actually
+        // reflowed anything!
+        if flow::base(flow).flags.impacted_by_floats() {
+            return
+        }
+
         flow.assign_block_size(self.layout_context);
+
         // Skip store-overflow for absolutely positioned flows. That will be
         // done in a separate traversal.
         if !flow.is_store_overflow_delayed() {
@@ -317,7 +342,7 @@ impl<'a> PostorderFlowTraversal for AssignBSizesAndStoreOverflow<'a> {
 
     #[inline]
     fn should_process(&self, flow: &mut Flow) -> bool {
-        !flow::base(flow).flags.impacted_by_floats()
+        flow::base(flow).restyle_damage.intersects(ReflowOutOfFlow | Reflow)
     }
 }
 
@@ -328,7 +353,7 @@ pub struct ComputeAbsolutePositions<'a> {
 impl<'a> PreorderFlowTraversal for ComputeAbsolutePositions<'a> {
     #[inline]
     fn process(&self, flow: &mut Flow) {
-        flow.compute_absolute_position()
+        flow.compute_absolute_position();
     }
 }
 
@@ -339,6 +364,6 @@ pub struct BuildDisplayList<'a> {
 impl<'a> PostorderFlowTraversal for BuildDisplayList<'a> {
     #[inline]
     fn process(&self, flow: &mut Flow) {
-        flow.build_display_list(self.layout_context)
+        flow.build_display_list(self.layout_context);
     }
 }

@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use dom::bindings::cell::{DOMRefCell, Ref, RefMut};
 use dom::bindings::codegen::Bindings::EventHandlerBinding::{OnErrorEventHandlerNonNull, EventHandlerNonNull};
 use dom::bindings::codegen::Bindings::WindowBinding;
 use dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
@@ -18,7 +19,7 @@ use dom::location::Location;
 use dom::navigator::Navigator;
 use dom::performance::Performance;
 use dom::screen::Screen;
-use layout_interface::{ReflowGoal, ReflowForDisplay};
+use layout_interface::NoQuery;
 use page::Page;
 use script_task::{ExitWindowMsg, ScriptChan, TriggerLoadMsg, TriggerFragmentMsg};
 use script_task::FromWindow;
@@ -39,7 +40,6 @@ use url::{Url, UrlParser};
 
 use libc;
 use serialize::base64::{FromBase64, ToBase64, STANDARD};
-use std::cell::{Ref, RefCell};
 use std::default::Default;
 use std::rc::Rc;
 use time;
@@ -53,8 +53,8 @@ pub struct Window {
     location: MutNullableJS<Location>,
     navigator: MutNullableJS<Navigator>,
     image_cache_task: ImageCacheTask,
-    compositor: Box<ScriptListener+'static>,
-    browser_context: RefCell<Option<BrowserContext>>,
+    compositor: DOMRefCell<Box<ScriptListener+'static>>,
+    browser_context: DOMRefCell<Option<BrowserContext>>,
     page: Rc<Page>,
     performance: MutNullableJS<Performance>,
     navigation_start: u64,
@@ -81,8 +81,8 @@ impl Window {
         &self.image_cache_task
     }
 
-    pub fn compositor<'a>(&'a self) -> &'a ScriptListener+'static {
-        &*self.compositor
+    pub fn compositor(&self) -> RefMut<Box<ScriptListener+'static>> {
+        self.compositor.borrow_mut()
     }
 
     pub fn browser_context(&self) -> Ref<Option<BrowserContext>> {
@@ -272,45 +272,10 @@ impl<'a> WindowMethods for JSRef<'a, Window> {
         self.performance.get().unwrap()
     }
 
-    fn GetOnclick(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("click")
-    }
-
-    fn SetOnclick(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("click", listener)
-    }
-
-    fn GetOnload(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("load")
-    }
-
-    fn SetOnload(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("load", listener)
-    }
-
-    fn GetOnunload(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("unload")
-    }
-
-    fn SetOnunload(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("unload", listener)
-    }
-
-    fn GetOnerror(self) -> Option<OnErrorEventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("error")
-    }
-
-    fn SetOnerror(self, listener: Option<OnErrorEventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("error", listener)
-    }
+    event_handler!(click, GetOnclick, SetOnclick)
+    event_handler!(load, GetOnload, SetOnload)
+    event_handler!(unload, GetOnunload, SetOnunload)
+    error_event_handler!(error, GetOnerror, SetOnerror)
 
     fn Screen(self) -> Temporary<Screen> {
         if self.screen.get().is_none() {
@@ -347,21 +312,26 @@ impl Reflectable for Window {
 
 pub trait WindowHelpers {
     fn reflow(self);
-    fn flush_layout(self, goal: ReflowGoal);
+    fn flush_layout(self);
     fn wait_until_safe_to_modify_dom(self);
     fn init_browser_context(self, doc: JSRef<Document>);
     fn load_url(self, href: DOMString);
     fn handle_fire_timer(self, timer_id: TimerId, cx: *mut JSContext);
     fn evaluate_js_with_result(self, code: &str) -> JSVal;
+    fn evaluate_script_with_result(self, code: &str, filename: &str) -> JSVal;
 }
 
 
 impl<'a> WindowHelpers for JSRef<'a, Window> {
     fn evaluate_js_with_result(self, code: &str) -> JSVal {
+        self.evaluate_script_with_result(code, "")
+    }
+
+    fn evaluate_script_with_result(self, code: &str, filename: &str) -> JSVal {
         let global = self.reflector().get_jsobject();
         let code: Vec<u16> = code.as_slice().utf16_units().collect();
         let mut rval = UndefinedValue();
-        let filename = "".to_c_str();
+        let filename = filename.to_c_str();
         let cx = self.get_cx();
 
         with_compartment(cx, global, || {
@@ -378,14 +348,10 @@ impl<'a> WindowHelpers for JSRef<'a, Window> {
 
     fn reflow(self) {
         self.page().damage();
-        // FIXME This should probably be ReflowForQuery, not Display. All queries currently
-        // currently rely on the display list, which means we can't destroy it by
-        // doing a query reflow.
-        self.page().reflow(ReflowForDisplay, self.control_chan.clone(), &*self.compositor);
     }
 
-    fn flush_layout(self, goal: ReflowGoal) {
-        self.page().flush_layout(goal);
+    fn flush_layout(self) {
+        self.page().flush_layout(NoQuery);
     }
 
     fn wait_until_safe_to_modify_dom(self) {
@@ -432,12 +398,12 @@ impl Window {
             script_chan: script_chan,
             control_chan: control_chan,
             console: Default::default(),
-            compositor: compositor,
+            compositor: DOMRefCell::new(compositor),
             page: page,
             location: Default::default(),
             navigator: Default::default(),
             image_cache_task: image_cache_task,
-            browser_context: RefCell::new(None),
+            browser_context: DOMRefCell::new(None),
             performance: Default::default(),
             navigation_start: time::get_time().sec as u64,
             navigation_start_precise: time::precise_time_s(),

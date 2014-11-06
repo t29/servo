@@ -7,14 +7,18 @@
 #![deny(unsafe_block)]
 
 use context::LayoutContext;
+use css::node_style::StyledNode;
 use flow::{BaseFlow, TableColGroupFlowClass, FlowClass, Flow};
-use fragment::{Fragment, TableColumnFragment};
+use fragment::{Fragment, FragmentBoundsIterator, TableColumnFragment};
 use layout_debug;
 use wrapper::ThreadSafeLayoutNode;
 
 use servo_util::geometry::Au;
+use std::cmp::max;
 use std::fmt;
 use style::computed_values::LengthOrPercentageOrAuto;
+use style::ComputedValues;
+use sync::Arc;
 
 /// A table formatting context.
 pub struct TableColGroupFlow {
@@ -38,8 +42,9 @@ impl TableColGroupFlow {
                                    fragment: Fragment,
                                    fragments: Vec<Fragment>)
                                    -> TableColGroupFlow {
+        let writing_mode = node.style().writing_mode;
         TableColGroupFlow {
-            base: BaseFlow::new((*node).clone()),
+            base: BaseFlow::new(Some((*node).clone()), writing_mode),
             fragment: Some(fragment),
             cols: fragments,
             inline_sizes: vec!(),
@@ -64,7 +69,7 @@ impl Flow for TableColGroupFlow {
             // Retrieve the specified value from the appropriate CSS property.
             let inline_size = fragment.style().content_inline_size();
             let span: int = match fragment.specific {
-                TableColumnFragment(col_fragment) => col_fragment.span.unwrap_or(1),
+                TableColumnFragment(col_fragment) => max(col_fragment.span, 1),
                 _ => fail!("non-table-column fragment inside table column?!"),
             };
             for _ in range(0, span) {
@@ -85,6 +90,14 @@ impl Flow for TableColGroupFlow {
     fn update_late_computed_inline_position_if_necessary(&mut self, _: Au) {}
 
     fn update_late_computed_block_position_if_necessary(&mut self, _: Au) {}
+
+    // Table columns are invisible.
+    fn build_display_list(&mut self, _: &LayoutContext) {}
+
+    fn repair_style(&mut self, _: &Arc<ComputedValues>) {}
+
+    fn iterate_through_fragment_bounds(&self, _: &mut FragmentBoundsIterator) {
+    }
 }
 
 impl fmt::Show for TableColGroupFlow {

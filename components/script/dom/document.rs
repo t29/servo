@@ -3,9 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use dom::attr::AttrHelpers;
+use dom::bindings::cell::{DOMRefCell, Ref};
 use dom::bindings::codegen::Bindings::DocumentBinding;
-use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
+use dom::bindings::codegen::Bindings::DocumentBinding::{DocumentMethods, DocumentReadyState};
+use dom::bindings::codegen::Bindings::DocumentBinding::DocumentReadyStateValues;
 use dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull;
+use dom::bindings::codegen::Bindings::EventTargetBinding::EventTargetMethods;
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
 use dom::bindings::codegen::Bindings::NodeFilterBinding::NodeFilter;
 use dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
@@ -30,10 +33,10 @@ use dom::customevent::CustomEvent;
 use dom::documentfragment::DocumentFragment;
 use dom::documenttype::DocumentType;
 use dom::domimplementation::DOMImplementation;
-use dom::element::{Element, AttributeHandlers, get_attribute_parts};
-use dom::element::{HTMLHtmlElementTypeId, HTMLHeadElementTypeId, HTMLTitleElementTypeId};
+use dom::element::{Element, ScriptCreated, AttributeHandlers, get_attribute_parts};
+use dom::element::{HTMLHeadElementTypeId, HTMLTitleElementTypeId};
 use dom::element::{HTMLBodyElementTypeId, HTMLFrameSetElementTypeId};
-use dom::event::Event;
+use dom::event::{Event, DoesNotBubble, NotCancelable};
 use dom::eventtarget::{EventTarget, NodeTargetTypeId, EventTargetHelpers};
 use dom::htmlanchorelement::HTMLAnchorElement;
 use dom::htmlcollection::{HTMLCollection, CollectionFilter};
@@ -52,7 +55,6 @@ use dom::range::Range;
 use dom::treewalker::TreeWalker;
 use dom::uievent::UIEvent;
 use dom::window::{Window, WindowHelpers};
-use parse::html::build_element_from_tag;
 use servo_util::namespace;
 use servo_util::str::{DOMString, split_html_space_chars};
 
@@ -62,7 +64,7 @@ use url::Url;
 
 use std::collections::hashmap::HashMap;
 use std::ascii::StrAsciiExt;
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::Cell;
 use std::default::Default;
 use time;
 
@@ -77,11 +79,11 @@ pub enum IsHTMLDocument {
 pub struct Document {
     node: Node,
     window: JS<Window>,
-    idmap: RefCell<HashMap<Atom, Vec<JS<Element>>>>,
+    idmap: DOMRefCell<HashMap<Atom, Vec<JS<Element>>>>,
     implementation: MutNullableJS<DOMImplementation>,
     content_type: DOMString,
-    last_modified: RefCell<Option<DOMString>>,
-    encoding_name: RefCell<DOMString>,
+    last_modified: DOMRefCell<Option<DOMString>>,
+    encoding_name: DOMRefCell<DOMString>,
     is_html_document: bool,
     url: Url,
     quirks_mode: Cell<QuirksMode>,
@@ -92,6 +94,7 @@ pub struct Document {
     scripts: MutNullableJS<HTMLCollection>,
     anchors: MutNullableJS<HTMLCollection>,
     applets: MutNullableJS<HTMLCollection>,
+    ready_state: Cell<DocumentReadyState>,
 }
 
 impl DocumentDerived for EventTarget {
@@ -158,6 +161,9 @@ impl CollectionFilter for AppletsFilter {
 }
 
 pub trait DocumentHelpers<'a> {
+    fn window(self) -> Temporary<Window>;
+    fn encoding_name(self) -> Ref<'a, DOMString>;
+    fn is_html_document(self) -> bool;
     fn url(self) -> &'a Url;
     fn quirks_mode(self) -> QuirksMode;
     fn set_quirks_mode(self, mode: QuirksMode);
@@ -170,9 +176,25 @@ pub trait DocumentHelpers<'a> {
     fn register_named_element(self, element: JSRef<Element>, id: Atom);
     fn load_anchor_href(self, href: DOMString);
     fn find_fragment_node(self, fragid: DOMString) -> Option<Temporary<Element>>;
+    fn set_ready_state(self, state: DocumentReadyState);
 }
 
 impl<'a> DocumentHelpers<'a> for JSRef<'a, Document> {
+    #[inline]
+    fn window(self) -> Temporary<Window> {
+        Temporary::new(self.window)
+    }
+
+    #[inline]
+    fn encoding_name(self) -> Ref<'a, DOMString> {
+        self.extended_deref().encoding_name.borrow()
+    }
+
+    #[inline]
+    fn is_html_document(self) -> bool {
+        self.is_html_document
+    }
+
     fn url(self) -> &'a Url {
         &self.extended_deref().url
     }
@@ -287,19 +309,55 @@ impl<'a> DocumentHelpers<'a> for JSRef<'a, Document> {
                     .map(|node| Temporary::from_rooted(ElementCast::from_ref(node)))
         })
     }
+
+    // https://html.spec.whatwg.org/multipage/dom.html#current-document-readiness
+    fn set_ready_state(self, state: DocumentReadyState) {
+        self.ready_state.set(state);
+
+        let window = self.window.root();
+        let event = Event::new(&global::Window(*window), "readystatechange".to_string(),
+                               DoesNotBubble, NotCancelable).root();
+        let target: JSRef<EventTarget> = EventTargetCast::from_ref(self);
+        let _ = target.DispatchEvent(*event);
+    }
+}
+
+#[deriving(PartialEq)]
+pub enum DocumentSource {
+    FromParser,
+    NotFromParser,
+}
+
+pub trait LayoutDocumentHelpers {
+    unsafe fn is_html_document_for_layout(&self) -> bool;
+}
+
+impl LayoutDocumentHelpers for JS<Document> {
+    #[allow(unrooted_must_root)]
+    #[inline]
+    unsafe fn is_html_document_for_layout(&self) -> bool {
+        (*self.unsafe_get()).is_html_document
+    }
 }
 
 impl Document {
     fn new_inherited(window: JSRef<Window>,
-                         url: Option<Url>,
-                         is_html_document: IsHTMLDocument,
-                         content_type: Option<DOMString>) -> Document {
+                     url: Option<Url>,
+                     is_html_document: IsHTMLDocument,
+                     content_type: Option<DOMString>,
+                     source: DocumentSource) -> Document {
         let url = url.unwrap_or_else(|| Url::parse("about:blank").unwrap());
+
+        let ready_state = if source == FromParser {
+            DocumentReadyStateValues::Loading
+        } else {
+            DocumentReadyStateValues::Complete
+        };
 
         Document {
             node: Node::new_without_doc(DocumentNodeTypeId),
             window: JS::from_rooted(window),
-            idmap: RefCell::new(HashMap::new()),
+            idmap: DOMRefCell::new(HashMap::new()),
             implementation: Default::default(),
             content_type: match content_type {
                 Some(string) => string.clone(),
@@ -310,12 +368,12 @@ impl Document {
                     NonHTMLDocument => "application/xml".to_string()
                 }
             },
-            last_modified: RefCell::new(None),
+            last_modified: DOMRefCell::new(None),
             url: url,
             // http://dom.spec.whatwg.org/#concept-document-quirks
             quirks_mode: Cell::new(NoQuirks),
             // http://dom.spec.whatwg.org/#concept-document-encoding
-            encoding_name: RefCell::new("utf-8".to_string()),
+            encoding_name: DOMRefCell::new("utf-8".to_string()),
             is_html_document: is_html_document == HTMLDocument,
             images: Default::default(),
             embeds: Default::default(),
@@ -324,37 +382,28 @@ impl Document {
             scripts: Default::default(),
             anchors: Default::default(),
             applets: Default::default(),
+            ready_state: Cell::new(ready_state),
         }
     }
 
     // http://dom.spec.whatwg.org/#dom-document
     pub fn Constructor(global: &GlobalRef) -> Fallible<Temporary<Document>> {
-        Ok(Document::new(global.as_window(), None, NonHTMLDocument, None))
+        Ok(Document::new(global.as_window(), None, NonHTMLDocument, None, NotFromParser))
     }
 
-    pub fn new(window: JSRef<Window>, url: Option<Url>, doctype: IsHTMLDocument, content_type: Option<DOMString>) -> Temporary<Document> {
-        let document = reflect_dom_object(box Document::new_inherited(window, url, doctype, content_type),
+    pub fn new(window: JSRef<Window>,
+               url: Option<Url>,
+               doctype: IsHTMLDocument,
+               content_type: Option<DOMString>,
+               source: DocumentSource) -> Temporary<Document> {
+        let document = reflect_dom_object(box Document::new_inherited(window, url, doctype,
+                                                                      content_type, source),
                                           &global::Window(window),
                                           DocumentBinding::Wrap).root();
 
         let node: JSRef<Node> = NodeCast::from_ref(*document);
         node.set_owner_doc(*document);
         Temporary::from_rooted(*document)
-    }
-
-    #[inline]
-    pub fn window<'a>(&'a self) -> &'a JS<Window> {
-        &self.window
-    }
-
-    #[inline]
-    pub fn encoding_name(&self) -> Ref<DOMString> {
-        self.encoding_name.borrow()
-    }
-
-    #[inline]
-    pub fn is_html_document(&self) -> bool {
-        self.is_html_document
     }
 }
 
@@ -372,34 +421,20 @@ trait PrivateDocumentHelpers {
 impl<'a> PrivateDocumentHelpers for JSRef<'a, Document> {
     fn createNodeList(self, callback: |node: JSRef<Node>| -> bool) -> Temporary<NodeList> {
         let window = self.window.root();
-
-        match self.GetDocumentElement().root() {
-            None => {
-                NodeList::new_simple_list(*window, vec!())
-            },
+        let nodes = match self.GetDocumentElement().root() {
+            None => vec!(),
             Some(root) => {
-                let mut nodes = vec!();
                 let root: JSRef<Node> = NodeCast::from_ref(*root);
-                for child in root.traverse_preorder() {
-                    if callback(child) {
-                        nodes.push(child);
-                    }
-                }
-                NodeList::new_simple_list(*window, nodes)
+                root.traverse_preorder().filter(|&node| callback(node)).collect()
             }
-        }
-
+        };
+        NodeList::new_simple_list(*window, nodes)
     }
 
     fn get_html_element(self) -> Option<Temporary<HTMLHtmlElement>> {
-        match self.GetDocumentElement().root() {
-            Some(ref root) if {
-                let root: JSRef<Node> = NodeCast::from_ref(**root);
-                root.type_id() == ElementNodeTypeId(HTMLHtmlElementTypeId)
-            } => Some(Temporary::from_rooted(HTMLHtmlElementCast::to_ref(**root).unwrap())),
-
-            _ => None,
-        }
+        self.GetDocumentElement().root().and_then(|element| {
+            HTMLHtmlElementCast::to_ref(*element)
+        }).map(Temporary::from_rooted)
     }
 }
 
@@ -493,7 +528,7 @@ impl<'a> DocumentMethods for JSRef<'a, Document> {
         }
         let local_name = local_name.as_slice().to_ascii_lower();
         let name = QualName::new(ns!(HTML), Atom::from_slice(local_name.as_slice()));
-        Ok(build_element_from_tag(name, None, self))
+        Ok(Element::create(name, None, self, ScriptCreated))
     }
 
     // http://dom.spec.whatwg.org/#dom-document-createelementns
@@ -538,7 +573,8 @@ impl<'a> DocumentMethods for JSRef<'a, Document> {
 
         if ns == ns!(HTML) {
             let name = QualName::new(ns!(HTML), Atom::from_slice(local_name_from_qname));
-            Ok(build_element_from_tag(name, prefix_from_qname.map(|s| s.to_string()), self))
+            Ok(Element::create(name, prefix_from_qname.map(|s| s.to_string()), self,
+                               ScriptCreated))
         } else {
             Ok(Element::new(local_name_from_qname.to_string(), ns,
                             prefix_from_qname.map(|s| s.to_string()), self))
@@ -652,11 +688,8 @@ impl<'a> DocumentMethods for JSRef<'a, Document> {
             root.traverse_preorder()
                 .find(|node| node.type_id() == ElementNodeTypeId(HTMLTitleElementTypeId))
                 .map(|title_elem| {
-                    for child in title_elem.children() {
-                        if child.is_text() {
-                            let text: JSRef<Text> = TextCast::to_ref(child).unwrap();
-                            title.push_str(text.characterdata().data().as_slice());
-                        }
+                    for text in title_elem.children().filter_map::<JSRef<Text>>(TextCast::to_ref) {
+                        title.push_str(text.characterdata().data().as_slice());
                     }
                 });
         });
@@ -707,11 +740,7 @@ impl<'a> DocumentMethods for JSRef<'a, Document> {
         self.get_html_element().and_then(|root| {
             let root = root.root();
             let node: JSRef<Node> = NodeCast::from_ref(*root);
-            node.children().find(|child| {
-                child.type_id() == ElementNodeTypeId(HTMLHeadElementTypeId)
-            }).map(|node| {
-                Temporary::from_rooted(HTMLHeadElementCast::to_ref(node).unwrap())
-            })
+            node.children().filter_map(HTMLHeadElementCast::to_ref).next().map(Temporary::from_rooted)
         })
     }
 
@@ -887,23 +916,12 @@ impl<'a> DocumentMethods for JSRef<'a, Document> {
         root.query_selector_all(selectors)
     }
 
-    fn GetOnclick(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("click")
+    // https://html.spec.whatwg.org/multipage/dom.html#dom-document-readystate
+    fn ReadyState(self) -> DocumentReadyState {
+        self.ready_state.get()
     }
 
-    fn SetOnclick(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("click", listener)
-    }
-
-    fn GetOnload(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("load")
-    }
-
-    fn SetOnload(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("load", listener)
-    }
+    event_handler!(click, GetOnclick, SetOnclick)
+    event_handler!(load, GetOnload, SetOnload)
+    event_handler!(readystatechange, GetOnreadystatechange, SetOnreadystatechange)
 }

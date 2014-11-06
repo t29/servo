@@ -12,7 +12,7 @@ use construct::FlowConstructor;
 use context::LayoutContext;
 use flow::{TableRowFlowClass, FlowClass, Flow, ImmutableFlowUtils};
 use flow;
-use fragment::Fragment;
+use fragment::{Fragment, FragmentBoundsIterator};
 use layout_debug;
 use table::{ColumnInlineSize, InternalTable};
 use model::{MaybeAuto, Specified, Auto};
@@ -21,7 +21,9 @@ use wrapper::ThreadSafeLayoutNode;
 use servo_util::geometry::Au;
 use std::cmp::max;
 use std::fmt;
+use style::ComputedValues;
 use style::computed_values::{LPA_Auto, LPA_Length, LPA_Percentage};
+use sync::Arc;
 
 /// A single row of a table.
 #[deriving(Encodable)]
@@ -125,11 +127,6 @@ impl TableRowFlow {
             let child_node = flow::mut_base(kid);
             child_node.position.size.block = block_size;
         }
-    }
-
-    pub fn build_display_list_table_row(&mut self, layout_context: &LayoutContext) {
-        debug!("build_display_list_table_row: same process as block flow");
-        self.block_flow.build_display_list_block(layout_context)
     }
 }
 
@@ -245,6 +242,18 @@ impl Flow for TableRowFlow {
 
     fn update_late_computed_block_position_if_necessary(&mut self, block_position: Au) {
         self.block_flow.update_late_computed_block_position_if_necessary(block_position)
+    }
+
+    fn build_display_list(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.build_display_list(layout_context)
+    }
+
+    fn repair_style(&mut self, new_style: &Arc<ComputedValues>) {
+        self.block_flow.repair_style(new_style)
+    }
+
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator) {
+        self.block_flow.iterate_through_fragment_bounds(iterator);
     }
 }
 

@@ -2,7 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use dom::attr::Attr;
 use dom::attr::AttrHelpers;
+use dom::bindings::codegen::Bindings::DocumentBinding::{DocumentMethods, DocumentReadyStateValues};
 use dom::bindings::codegen::Bindings::HTMLIFrameElementBinding;
 use dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElementMethods;
 use dom::bindings::codegen::InheritTypes::{NodeCast, ElementCast};
@@ -14,7 +16,7 @@ use dom::element::{HTMLIFrameElementTypeId, Element};
 use dom::element::AttributeHandlers;
 use dom::eventtarget::{EventTarget, NodeTargetTypeId};
 use dom::htmlelement::HTMLElement;
-use dom::node::{Node, NodeHelpers, ElementNodeTypeId, window_from_node};
+use dom::node::{Node, NodeHelpers, ElementNodeTypeId, window_from_node, document_from_node};
 use dom::virtualmethods::VirtualMethods;
 use dom::window::Window;
 use page::IterablePage;
@@ -23,7 +25,6 @@ use servo_msg::constellation_msg::{PipelineId, SubpageId};
 use servo_msg::constellation_msg::{IFrameSandboxed, IFrameUnsandboxed};
 use servo_msg::constellation_msg::{ConstellationChan, LoadIframeUrlMsg};
 use servo_util::str::DOMString;
-use string_cache::Atom;
 
 use std::ascii::StrAsciiExt;
 use std::cell::Cell;
@@ -119,8 +120,13 @@ impl<'a> HTMLIFrameElementHelpers for JSRef<'a, HTMLIFrameElement> {
             subpage_id: subpage_id,
         }));
 
-        let ConstellationChan(ref chan) = page.constellation_chan;
-        chan.send(LoadIframeUrlMsg(url, page.id, subpage_id, sandboxed));
+        let doc = document_from_node(self).root();
+        if doc.ReadyState() == DocumentReadyStateValues::Loading {
+            // https://github.com/servo/servo/issues/3738
+            // We can't handle dynamic frame tree changes in the compositor right now.
+            let ConstellationChan(ref chan) = page.constellation_chan;
+            chan.send(LoadIframeUrlMsg(url, page.id, subpage_id, sandboxed));
+        }
     }
 }
 
@@ -188,44 +194,47 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLIFrameElement> {
         Some(htmlelement as &VirtualMethods)
     }
 
-    fn after_set_attr(&self, name: &Atom, value: DOMString) {
+    fn after_set_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.after_set_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.after_set_attr(attr),
+            _ => ()
         }
 
-        if "sandbox" == name.as_slice() {
-            let mut modes = AllowNothing as u8;
-            for word in value.as_slice().split(' ') {
-                modes |= match word.to_ascii_lower().as_slice() {
-                    "allow-same-origin" => AllowSameOrigin,
-                    "allow-forms" => AllowForms,
-                    "allow-pointer-lock" => AllowPointerLock,
-                    "allow-popups" => AllowPopups,
-                    "allow-scripts" => AllowScripts,
-                    "allow-top-navigation" => AllowTopNavigation,
-                    _ => AllowNothing
-                } as u8;
-            }
-            self.sandbox.set(Some(modes));
-        }
-
-        if "src" == name.as_slice() {
-            let node: JSRef<Node> = NodeCast::from_ref(*self);
-            if node.is_in_doc() {
-                self.process_the_iframe_attributes()
-            }
+        match attr.local_name() {
+            &atom!("sandbox") => {
+                let mut modes = AllowNothing as u8;
+                for word in attr.value().as_slice().split(' ') {
+                    modes |= match word.to_ascii_lower().as_slice() {
+                        "allow-same-origin" => AllowSameOrigin,
+                        "allow-forms" => AllowForms,
+                        "allow-pointer-lock" => AllowPointerLock,
+                        "allow-popups" => AllowPopups,
+                        "allow-scripts" => AllowScripts,
+                        "allow-top-navigation" => AllowTopNavigation,
+                        _ => AllowNothing
+                    } as u8;
+                }
+                self.sandbox.set(Some(modes));
+            },
+            &atom!("src") => {
+                let node: JSRef<Node> = NodeCast::from_ref(*self);
+                if node.is_in_doc() {
+                    self.process_the_iframe_attributes()
+                }
+            },
+            _ => ()
         }
     }
 
-    fn before_remove_attr(&self, name: &Atom, value: DOMString) {
+    fn before_remove_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.before_remove_attr(name, value),
-            _ => (),
+            Some(ref s) => s.before_remove_attr(attr),
+            _ => ()
         }
 
-        if "sandbox" == name.as_slice() {
-            self.sandbox.set(None);
+        match attr.local_name() {
+            &atom!("sandbox") => self.sandbox.set(None),
+            _ => ()
         }
     }
 

@@ -5,6 +5,7 @@
 #![feature(globs, macro_rules, phase, thread_local, link_args)]
 
 #![allow(experimental, non_camel_case_types)]
+#![deny(unused_imports, unused_variable, unused_mut)]
 
 #![feature(phase)]
 #[phase(plugin, link)]
@@ -22,7 +23,6 @@ extern crate glfw;
 extern crate glfw_app;
 extern crate js;
 extern crate layers;
-extern crate opengles;
 extern crate png;
 extern crate script;
 

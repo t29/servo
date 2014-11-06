@@ -9,6 +9,8 @@
 #![deny(unused_imports, unused_variable)]
 
 extern crate alert;
+#[cfg(target_os="macos")]
+extern crate cgl;
 extern crate compositing;
 extern crate geom;
 extern crate glfw;
@@ -18,13 +20,19 @@ extern crate msg;
 extern crate time;
 extern crate util;
 
+use compositing::windowing::WindowEvent;
 use geom::scale_factor::ScaleFactor;
 use std::rc::Rc;
 use window::Window;
+use util::opts;
 
-mod window;
+pub mod window;
 
-pub fn create_window(opts: &util::opts::Opts) -> Rc<Window> {
+pub trait NestedEventLoopListener {
+    fn handle_event_from_nested_event_loop(&mut self, event: WindowEvent) -> bool;
+}
+
+pub fn create_window() -> Rc<Window> {
     // Initialize GLFW.
     let glfw = glfw::init(glfw::LOG_ERRORS).unwrap_or_else(|_| {
         // handles things like inability to connect to X
@@ -34,9 +42,9 @@ pub fn create_window(opts: &util::opts::Opts) -> Rc<Window> {
     });
 
     // Read command-line options.
-    let foreground = opts.output_file.is_none();
-    let scale_factor = opts.device_pixels_per_px.unwrap_or(ScaleFactor(1.0));
-    let size = opts.initial_window_size.as_f32() * scale_factor;
+    let foreground = opts::get().output_file.is_none();
+    let scale_factor = opts::get().device_pixels_per_px.unwrap_or(ScaleFactor(1.0));
+    let size = opts::get().initial_window_size.as_f32() * scale_factor;
 
     // Open a window.
     Window::new(glfw, foreground, size.as_uint())

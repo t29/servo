@@ -7,16 +7,16 @@
 
 use geometry::ScreenPx;
 
-use azure::azure_hl::{BackendType, CairoBackend, CoreGraphicsBackend};
-use azure::azure_hl::{CoreGraphicsAcceleratedBackend, Direct2DBackend, SkiaBackend};
 use geom::scale_factor::ScaleFactor;
 use geom::size::TypedSize2D;
 use layers::geometry::DevicePixel;
 use getopts;
+use std::collections::HashSet;
 use std::cmp;
 use std::io;
 use std::mem;
 use std::os;
+use std::ptr;
 use std::rt;
 
 /// Global flags for Servo, currently set on the command line.
@@ -25,17 +25,14 @@ pub struct Opts {
     /// The initial URLs to load.
     pub urls: Vec<String>,
 
-    /// The rendering backend to use (`-r`).
-    pub render_backend: BackendType,
-
     /// How many threads to use for CPU rendering (`-t`).
     ///
     /// FIXME(pcwalton): This is not currently used. All rendering is sequential.
     pub n_render_threads: uint,
 
-    /// True to use CPU painting, false to use GPU painting via Skia-GL (`-c`). Note that
+    /// True to use GPU painting via Skia-GL, false to use CPU painting via Skia (`-g`). Note that
     /// compositing is always done on the GPU.
-    pub cpu_painting: bool,
+    pub gpu_painting: bool,
 
     /// The maximum size of each tile in pixels (`-s`).
     pub tile_size: uint,
@@ -59,7 +56,7 @@ pub struct Opts {
     /// sequential algorithm.
     pub layout_threads: uint,
 
-    pub incremental_layout: bool,
+    pub nonincremental_layout: bool,
 
     /// True to exit after the page load (`-x`).
     pub exit_after_load: bool,
@@ -78,6 +75,9 @@ pub struct Opts {
     /// debugging purposes (`--show-debug-borders`).
     pub show_debug_borders: bool,
 
+    /// True if we should show borders on all fragments for debugging purposes (`--show-debug-fragment-borders`).
+    pub show_debug_fragment_borders: bool,
+
     /// If set with --disable-text-aa, disable antialiasing on fonts. This is primarily useful for reftests
     /// where pixel perfect results are required when using fonts such as the Ahem
     /// font for layout tests.
@@ -87,6 +87,11 @@ pub struct Opts {
     /// for debugging purposes. Settings this implies sequential layout
     /// and render.
     pub trace_layout: bool,
+
+    /// If true, instrument the runtime for each task created and dump
+    /// that information to a JSON file that can be viewed in the task
+    /// profile viewer.
+    pub profile_tasks: bool,
 
     /// `None` to disable devtools or `Some` with a port number to start a server to listen to
     /// remote Firefox devtools connections.
@@ -100,6 +105,9 @@ pub struct Opts {
 
     /// Dumps the flow tree after a layout.
     pub dump_flow_tree: bool,
+
+    /// Whether to show an error when display list geometry escapes flow overflow regions.
+    pub validate_display_list_geometry: bool,
 }
 
 fn print_usage(app: &str, opts: &[getopts::OptGroup]) {
@@ -107,19 +115,77 @@ fn print_usage(app: &str, opts: &[getopts::OptGroup]) {
     println!("{}", getopts::usage(message.as_slice(), opts));
 }
 
+pub fn print_debug_usage(app: &str)  {
+    fn print_option(name: &str, description: &str) {
+        println!("\t{:<35} {}", name, description);
+    }
+
+    println!("Usage: {} debug option,[options,...]\n\twhere options include\n\nOptions:", app);
+
+    print_option("bubble-widths", "Bubble intrinsic widths separately like other engines.");
+    print_option("disable-text-aa", "Disable antialiasing of rendered text.");
+    print_option("dump-flow-tree", "Print the flow tree after each layout.");
+    print_option("profile-tasks", "Instrument each task, writing the output to a file.");
+    print_option("show-compositor-borders", "Paint borders along layer and tile boundaries.");
+    print_option("show-fragment-borders", "Paint borders along fragment boundaries.");
+    print_option("trace-layout", "Write layout trace to an external file for debugging.");
+    print_option("validate-display-list-geometry",
+                 "Display an error when display list geometry escapes overflow region.");
+
+    println!("");
+}
+
 fn args_fail(msg: &str) {
     io::stderr().write_line(msg).unwrap();
     os::set_exit_status(1);
 }
 
-pub fn from_cmdline_args(args: &[String]) -> Option<Opts> {
+// Always use CPU rendering on android.
+
+#[cfg(target_os="android")]
+static FORCE_CPU_PAINTING: bool = true;
+
+#[cfg(not(target_os="android"))]
+static FORCE_CPU_PAINTING: bool = false;
+
+fn default_opts() -> Opts {
+    Opts {
+        urls: vec!(),
+        n_render_threads: 1,
+        gpu_painting: false,
+        tile_size: 512,
+        device_pixels_per_px: None,
+        time_profiler_period: None,
+        memory_profiler_period: None,
+        enable_experimental: false,
+        layout_threads: 1,
+        nonincremental_layout: false,
+        exit_after_load: false,
+        output_file: None,
+        headless: true,
+        hard_fail: true,
+        bubble_inline_sizes_separately: false,
+        show_debug_borders: false,
+        show_debug_fragment_borders: false,
+        enable_text_antialiasing: false,
+        trace_layout: false,
+        devtools_port: None,
+        initial_window_size: TypedSize2D(800, 600),
+        user_agent: None,
+        dump_flow_tree: false,
+        validate_display_list_geometry: false,
+        profile_tasks: false,
+    }
+}
+
+pub fn from_cmdline_args(args: &[String]) -> bool {
     let app_name = args[0].to_string();
     let args = args.tail();
 
     let opts = vec!(
-        getopts::optflag("c", "cpu", "CPU rendering"),
+        getopts::optflag("c", "cpu", "CPU painting (default)"),
+        getopts::optflag("g", "gpu", "GPU painting"),
         getopts::optopt("o", "output", "Output file", "output.png"),
-        getopts::optopt("r", "rendering", "Rendering backend", "direct2d|core-graphics|core-graphics-accelerated|cairo|skia."),
         getopts::optopt("s", "size", "Size of tiles", "512"),
         getopts::optopt("", "device-pixel-ratio", "Device pixels per px", ""),
         getopts::optflag("e", "experimental", "Enable experimental web features"),
@@ -128,17 +194,13 @@ pub fn from_cmdline_args(args: &[String]) -> Option<Opts> {
         getopts::optflagopt("m", "memory-profile", "Memory profiler flag and output interval", "10"),
         getopts::optflag("x", "exit", "Exit after load flag"),
         getopts::optopt("y", "layout-threads", "Number of threads to use for layout", "1"),
-        getopts::optflag("i", "incremental-layout", "Whether or not to use incremental layout."),
+        getopts::optflag("i", "nonincremental-layout", "Enable to turn off incremental layout."),
         getopts::optflag("z", "headless", "Headless mode"),
         getopts::optflag("f", "hard-fail", "Exit on task failure instead of displaying about:failure"),
-        getopts::optflag("b", "bubble-widths", "Bubble intrinsic widths separately like other engines"),
-        getopts::optflag("", "show-debug-borders", "Show debugging borders on layers and tiles."),
-        getopts::optflag("", "disable-text-aa", "Disable antialiasing for text rendering."),
-        getopts::optflag("", "trace-layout", "Write layout trace to external file for debugging."),
         getopts::optflagopt("", "devtools", "Start remote devtools server on port", "6000"),
         getopts::optopt("", "resolution", "Set window resolution.", "800x600"),
         getopts::optopt("u", "user-agent", "Set custom user agent string", "NCSA Mosaic/1.0 (X11;SunOS 4.1.4 sun4m)"),
-        getopts::optflag("", "dump-flow-tree", "Dump the flow (render) tree during each layout."),
+        getopts::optopt("Z", "debug", "A comma-separated string of debug options. Pass help to show available options.", ""),
         getopts::optflag("h", "help", "Print this message")
     );
 
@@ -146,40 +208,34 @@ pub fn from_cmdline_args(args: &[String]) -> Option<Opts> {
         Ok(m) => m,
         Err(f) => {
             args_fail(format!("{}", f).as_slice());
-            return None;
+            return false;
         }
     };
 
     if opt_match.opt_present("h") || opt_match.opt_present("help") {
         print_usage(app_name.as_slice(), opts.as_slice());
-        return None;
+        return false;
     };
+
+    let mut debug_options = HashSet::new();
+    let debug_string = match opt_match.opt_str("Z") {
+        Some(string) => string,
+        None => String::new()
+    };
+    for split in debug_string.as_slice().split(',') {
+        debug_options.insert(split.clone());
+    }
+    if debug_options.contains(&"help") {
+        print_debug_usage(app_name.as_slice());
+        return false;
+    }
 
     let urls = if opt_match.free.is_empty() {
         print_usage(app_name.as_slice(), opts.as_slice());
         args_fail("servo asks that you provide 1 or more URLs");
-        return None;
+        return false;
     } else {
         opt_match.free.clone()
-    };
-
-    let render_backend = match opt_match.opt_str("r") {
-        Some(backend_str) => {
-            if "direct2d" == backend_str.as_slice() {
-                Direct2DBackend
-            } else if "core-graphics" == backend_str.as_slice() {
-                CoreGraphicsBackend
-            } else if "core-graphics-accelerated" == backend_str.as_slice() {
-                CoreGraphicsAcceleratedBackend
-            } else if "cairo" == backend_str.as_slice() {
-                CairoBackend
-            } else if "skia" == backend_str.as_slice() {
-                SkiaBackend
-            } else {
-                fail!("unknown backend type")
-            }
-        }
-        None => SkiaBackend
     };
 
     let tile_size: uint = match opt_match.opt_str("s") {
@@ -204,18 +260,17 @@ pub fn from_cmdline_args(args: &[String]) -> Option<Opts> {
         from_str(period.as_slice()).unwrap()
     });
 
-    let cpu_painting = opt_match.opt_present("c");
+    let gpu_painting = !FORCE_CPU_PAINTING && opt_match.opt_present("g");
 
     let mut layout_threads: uint = match opt_match.opt_str("y") {
         Some(layout_threads_str) => from_str(layout_threads_str.as_slice()).unwrap(),
         None => cmp::max(rt::default_sched_threads() * 3 / 4, 1),
     };
 
-    let incremental_layout = opt_match.opt_present("i");
+    let nonincremental_layout = opt_match.opt_present("i");
 
-    let mut bubble_inline_sizes_separately = opt_match.opt_present("b");
-
-    let trace_layout = opt_match.opt_present("trace-layout");
+    let mut bubble_inline_sizes_separately = debug_options.contains(&"bubble-widths");
+    let trace_layout = debug_options.contains(&"trace-layout");
     if trace_layout {
         n_render_threads = 1;
         layout_threads = 1;
@@ -238,36 +293,34 @@ pub fn from_cmdline_args(args: &[String]) -> Option<Opts> {
 
     let opts = Opts {
         urls: urls,
-        render_backend: render_backend,
         n_render_threads: n_render_threads,
-        cpu_painting: cpu_painting,
+        gpu_painting: gpu_painting,
         tile_size: tile_size,
         device_pixels_per_px: device_pixels_per_px,
         time_profiler_period: time_profiler_period,
         memory_profiler_period: memory_profiler_period,
         enable_experimental: opt_match.opt_present("e"),
         layout_threads: layout_threads,
-        incremental_layout: incremental_layout,
+        nonincremental_layout: nonincremental_layout,
         exit_after_load: opt_match.opt_present("x"),
         output_file: opt_match.opt_str("o"),
         headless: opt_match.opt_present("z"),
         hard_fail: opt_match.opt_present("f"),
         bubble_inline_sizes_separately: bubble_inline_sizes_separately,
-        show_debug_borders: opt_match.opt_present("show-debug-borders"),
-        enable_text_antialiasing: !opt_match.opt_present("disable-text-aa"),
+        profile_tasks: debug_options.contains(&"profile-tasks"),
         trace_layout: trace_layout,
         devtools_port: devtools_port,
         initial_window_size: initial_window_size,
         user_agent: opt_match.opt_str("u"),
-        dump_flow_tree: opt_match.opt_present("dump-flow-tree"),
+        show_debug_borders: debug_options.contains(&"show-compositor-borders"),
+        show_debug_fragment_borders: debug_options.contains(&"show-fragment-borders"),
+        enable_text_antialiasing: !debug_options.contains(&"disable-text-aa"),
+        dump_flow_tree: debug_options.contains(&"dump-flow-tree"),
+        validate_display_list_geometry: debug_options.contains(&"validate-display-list-geometry"),
     };
 
-    unsafe {
-        let box_opts = box opts.clone();
-        OPTIONS = mem::transmute(box_opts);
-    }
-
-    Some(opts)
+    set_opts(opts);
+    true
 }
 
 static mut EXPERIMENTAL_ENABLED: bool = false;
@@ -287,10 +340,25 @@ pub fn experimental_enabled() -> bool {
 // Make Opts available globally. This saves having to clone and pass
 // opts everywhere it is used, which gets particularly cumbersome
 // when passing through the DOM structures.
-// GWTODO: Change existing code that takes copies of opts to instead
-// make use of the global copy.
 static mut OPTIONS: *mut Opts = 0 as *mut Opts;
 
-pub fn get() -> &'static Opts {
-    unsafe { mem::transmute(OPTIONS) }
+pub fn set_opts(opts: Opts) {
+    unsafe {
+        let box_opts = box opts;
+        OPTIONS = mem::transmute(box_opts);
+    }
+}
+
+#[inline]
+pub fn get<'a>() -> &'a Opts {
+    unsafe {
+        // If code attempts to retrieve the options and they haven't
+        // been set by the platform init code, just return a default
+        // set of options. This is mostly useful for unit tests that
+        // run through a code path which queries the cmd line options.
+        if OPTIONS == ptr::null_mut() {
+            set_opts(default_opts());
+        }
+        mem::transmute(OPTIONS)
+    }
 }

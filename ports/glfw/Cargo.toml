@@ -28,3 +28,6 @@ path = "../../components/msg"
 
 [dependencies.util]
 path = "../../components/util"
+
+[dependencies.cgl]
+git = "https://github.com/servo/rust-cgl"

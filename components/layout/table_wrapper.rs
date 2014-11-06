@@ -7,7 +7,7 @@
 //! This follows the "More Precise Definitions of Inline Layout and Table Layout" proposal written
 //! by L. David Baron (Mozilla) here:
 //!
-//!     http://dbaron.org/css/intrinsic/
+//!   http://dbaron.org/css/intrinsic/
 //!
 //! Hereafter this document is referred to as INTRINSIC.
 
@@ -19,15 +19,16 @@ use construct::FlowConstructor;
 use context::LayoutContext;
 use floats::FloatKind;
 use flow::{TableWrapperFlowClass, FlowClass, Flow, ImmutableFlowUtils};
-use fragment::Fragment;
+use fragment::{Fragment, FragmentBoundsIterator};
 use table::ColumnInlineSize;
 use wrapper::ThreadSafeLayoutNode;
 
 use servo_util::geometry::Au;
 use std::cmp::{max, min};
 use std::fmt;
-use style::CSSFloat;
-use style::computed_values::{clear, float, table_layout};
+use style::{ComputedValues, CSSFloat};
+use style::computed_values::table_layout;
+use sync::Arc;
 
 #[deriving(Encodable)]
 pub enum TableLayout {
@@ -40,7 +41,13 @@ pub enum TableLayout {
 pub struct TableWrapperFlow {
     pub block_flow: BlockFlow,
 
-    /// Inline-size information for each column.
+    /// Intrinsic column inline sizes according to INTRINSIC § 4.1
+    pub intrinsic_column_inline_sizes: Vec<ColumnInlineSize>,
+
+    /// Computed inline-size for each column.
+    ///
+    /// FIXME: This should be a separate type that only contains computed inline
+    /// sizes.
     pub column_inline_sizes: Vec<ColumnInlineSize>,
 
     /// Table-layout property
@@ -60,6 +67,7 @@ impl TableWrapperFlow {
         };
         TableWrapperFlow {
             block_flow: block_flow,
+            intrinsic_column_inline_sizes: vec!(),
             column_inline_sizes: vec!(),
             table_layout: table_layout
         }
@@ -77,6 +85,7 @@ impl TableWrapperFlow {
         };
         TableWrapperFlow {
             block_flow: block_flow,
+            intrinsic_column_inline_sizes: vec!(),
             column_inline_sizes: vec!(),
             table_layout: table_layout
         }
@@ -95,14 +104,10 @@ impl TableWrapperFlow {
         };
         TableWrapperFlow {
             block_flow: block_flow,
+            intrinsic_column_inline_sizes: vec!(),
             column_inline_sizes: vec!(),
             table_layout: table_layout
         }
-    }
-
-    pub fn build_display_list_table_wrapper(&mut self, layout_context: &LayoutContext) {
-        debug!("build_display_list_table_wrapper: same process as block flow");
-        self.block_flow.build_display_list_block(layout_context);
     }
 
     /// Calculates table column sizes for automatic layout per INTRINSIC § 4.3.
@@ -231,20 +236,12 @@ impl Flow for TableWrapperFlow {
         &mut self.block_flow
     }
 
-    fn float_clearance(&self) -> clear::T {
-        self.block_flow.float_clearance()
-    }
-
-    fn float_kind(&self) -> float::T {
-        self.block_flow.float_kind()
-    }
-
     fn bubble_inline_sizes(&mut self) {
         // Get the column inline-sizes info from the table flow.
         for kid in self.block_flow.base.child_iter() {
             debug_assert!(kid.is_table_caption() || kid.is_table());
             if kid.is_table() {
-                self.column_inline_sizes = kid.column_inline_sizes().clone()
+                self.intrinsic_column_inline_sizes = kid.column_inline_sizes().clone()
             }
         }
 
@@ -258,6 +255,8 @@ impl Flow for TableWrapperFlow {
                } else {
                    "table_wrapper"
                });
+
+        self.column_inline_sizes = self.intrinsic_column_inline_sizes.clone();
 
         // Table wrappers are essentially block formatting contexts and are therefore never
         // impacted by floats.
@@ -293,6 +292,7 @@ impl Flow for TableWrapperFlow {
         self.block_flow.propagate_assigned_inline_size_to_children(inline_start_content_edge,
                                                                    content_inline_size,
                                                                    assigned_column_inline_sizes);
+
     }
 
     fn assign_block_size<'a>(&mut self, ctx: &'a LayoutContext<'a>) {
@@ -325,6 +325,18 @@ impl Flow for TableWrapperFlow {
 
     fn update_late_computed_block_position_if_necessary(&mut self, block_position: Au) {
         self.block_flow.update_late_computed_block_position_if_necessary(block_position)
+    }
+
+    fn build_display_list(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.build_display_list(layout_context)
+    }
+
+    fn repair_style(&mut self, new_style: &Arc<ComputedValues>) {
+        self.block_flow.repair_style(new_style)
+    }
+
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator) {
+        self.block_flow.iterate_through_fragment_bounds(iterator);
     }
 }
 
@@ -564,4 +576,3 @@ impl ExcessInlineSizeDistributionInfo {
             amount_to_distribute
     }
 }
-

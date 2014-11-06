@@ -29,7 +29,7 @@ use std::cell::Cell;
 use std::ptr;
 
 pub struct TrustedWorkerAddress(pub *const c_void);
-untraceable!(TrustedWorkerAddress)
+no_jsmanaged_fields!(TrustedWorkerAddress)
 
 #[dom_struct]
 pub struct Worker {
@@ -149,15 +149,7 @@ impl<'a> WorkerMethods for JSRef<'a, Worker> {
         Ok(())
     }
 
-    fn GetOnmessage(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("message")
-    }
-
-    fn SetOnmessage(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("message", listener)
-    }
+    event_handler!(message, GetOnmessage, SetOnmessage)
 }
 
 impl Reflectable for Worker {

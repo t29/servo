@@ -3,18 +3,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-use azure;
 use command_line::command_line_init;
 use eutil::fptr_is_null;
 use geom::size::TypedSize2D;
 use glfw_app;
 use libc::{c_int, c_void};
 use native;
-use servo;
+use servo::Browser;
 use servo_util::opts;
 use std::mem;
 use types::{cef_app_t, cef_main_args_t, cef_settings_t};
-
 
 #[no_mangle]
 pub extern "C" fn cef_initialize(args: *const cef_main_args_t,
@@ -49,18 +47,17 @@ pub extern "C" fn cef_shutdown() {
 pub extern "C" fn cef_run_message_loop() {
     let mut urls = Vec::new();
     urls.push("http://s27.postimg.org/vqbtrolyr/servo.jpg".to_string());
-    let opts = opts::Opts {
+    opts::set_opts(opts::Opts {
         urls: urls,
-        render_backend: azure::azure_hl::SkiaBackend,
         n_render_threads: 1,
-        cpu_painting: false,
+        gpu_painting: false,
         tile_size: 512,
         device_pixels_per_px: None,
         time_profiler_period: None,
         memory_profiler_period: None,
         enable_experimental: false,
         layout_threads: 1,
-        incremental_layout: false,
+        nonincremental_layout: false,
         //layout_threads: cmp::max(rt::default_sched_threads() * 3 / 4, 1),
         exit_after_load: false,
         output_file: None,
@@ -68,16 +65,21 @@ pub extern "C" fn cef_run_message_loop() {
         hard_fail: false,
         bubble_inline_sizes_separately: false,
         show_debug_borders: false,
+        show_debug_fragment_borders: false,
         enable_text_antialiasing: true,
         trace_layout: false,
         devtools_port: None,
         initial_window_size: TypedSize2D(800, 600),
+        profile_tasks: false,
         user_agent: None,
         dump_flow_tree: false,
-    };
+        validate_display_list_geometry: false,
+    });
     native::start(0, 0 as *const *const u8, proc() {
-       let window = Some(glfw_app::create_window(&opts));
-       servo::run(opts, window);
+        let window = glfw_app::create_window();
+        let mut browser = Browser::new(Some(window.clone()));
+        while browser.handle_event(window.wait_events()) {}
+        browser.shutdown()
     });
 }
 

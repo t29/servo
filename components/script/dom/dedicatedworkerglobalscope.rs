@@ -19,11 +19,14 @@ use dom::workerglobalscope::DedicatedGlobalScope;
 use dom::workerglobalscope::{WorkerGlobalScope, WorkerGlobalScopeHelpers};
 use dom::xmlhttprequest::XMLHttpRequest;
 use script_task::{ScriptTask, ScriptChan};
-use script_task::{ScriptMsg, FromWorker,  DOMMessage, FireTimerMsg, XHRProgressMsg, WorkerRelease};
+use script_task::{ScriptMsg, FromWorker,  DOMMessage, FireTimerMsg, XHRProgressMsg, XHRReleaseMsg, WorkerRelease};
 use script_task::WorkerPostMessage;
 use script_task::StackRootTLS;
 
 use servo_net::resource_task::{ResourceTask, load_whole_resource};
+use servo_util::task::spawn_named_native;
+use servo_util::task_state;
+use servo_util::task_state::{Script, InWorker};
 
 use js::glue::JS_STRUCTURED_CLONE_VERSION;
 use js::jsapi::{JSContext, JS_ReadStructuredClone, JS_WriteStructuredClone, JS_ClearPendingException};
@@ -32,8 +35,6 @@ use js::rust::Cx;
 
 use std::rc::Rc;
 use std::ptr;
-use std::task::TaskBuilder;
-use native::task::NativeTaskBuilder;
 use url::Url;
 
 #[dom_struct]
@@ -86,10 +87,10 @@ impl DedicatedWorkerGlobalScope {
                             parent_sender: ScriptChan,
                             own_sender: ScriptChan,
                             receiver: Receiver<ScriptMsg>) {
-        TaskBuilder::new()
-            .native()
-            .named(format!("Web Worker at {}", worker_url.serialize()))
-            .spawn(proc() {
+        spawn_named_native(format!("WebWorker for {}", worker_url.serialize()), proc() {
+
+            task_state::initialize(Script | InWorker);
+
             let roots = RootCollection::new();
             let _stack_roots_tls = StackRootTLS::new(&roots);
 
@@ -133,7 +134,10 @@ impl DedicatedWorkerGlobalScope {
                         global.delayed_release_worker();
                     },
                     Ok(XHRProgressMsg(addr, progress)) => {
-                        XMLHttpRequest::handle_xhr_progress(addr, progress)
+                        XMLHttpRequest::handle_progress(addr, progress)
+                    },
+                    Ok(XHRReleaseMsg(addr)) => {
+                        XMLHttpRequest::handle_release(addr)
                     },
                     Ok(WorkerPostMessage(addr, data, nbytes)) => {
                         Worker::handle_message(addr, data, nbytes);
@@ -170,15 +174,7 @@ impl<'a> DedicatedWorkerGlobalScopeMethods for JSRef<'a, DedicatedWorkerGlobalSc
         Ok(())
     }
 
-    fn GetOnmessage(self) -> Option<EventHandlerNonNull> {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.get_event_handler_common("message")
-    }
-
-    fn SetOnmessage(self, listener: Option<EventHandlerNonNull>) {
-        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
-        eventtarget.set_event_handler_common("message", listener)
-    }
+    event_handler!(message, GetOnmessage, SetOnmessage)
 }
 
 trait PrivateDedicatedWorkerGlobalScopeHelpers {

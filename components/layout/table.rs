@@ -12,7 +12,7 @@ use construct::FlowConstructor;
 use context::LayoutContext;
 use floats::FloatKind;
 use flow::{TableFlowClass, FlowClass, Flow, ImmutableFlowUtils};
-use fragment::Fragment;
+use fragment::{Fragment, FragmentBoundsIterator};
 use layout_debug;
 use model::{IntrinsicISizes, IntrinsicISizesContribution};
 use table_wrapper::{TableLayout, FixedLayout, AutoLayout};
@@ -22,8 +22,9 @@ use servo_util::geometry::Au;
 use servo_util::logical_geometry::LogicalRect;
 use std::cmp::max;
 use std::fmt;
+use style::{ComputedValues, CSSFloat};
 use style::computed_values::{LPA_Auto, LPA_Length, LPA_Percentage, table_layout};
-use style::CSSFloat;
+use sync::Arc;
 
 /// A table flow corresponded to the table's internal table fragment under a table wrapper flow.
 /// The properties `position`, `float`, and `margin-*` are used on the table wrapper fragment,
@@ -125,11 +126,6 @@ impl TableFlow {
     #[inline(always)]
     fn assign_block_size_table_base<'a>(&mut self, layout_context: &'a LayoutContext<'a>) {
         self.block_flow.assign_block_size_block_base(layout_context, MarginsMayNotCollapse);
-    }
-
-    pub fn build_display_list_table(&mut self, layout_context: &LayoutContext) {
-        debug!("build_display_list_table: same process as block flow");
-        self.block_flow.build_display_list_block(layout_context);
     }
 }
 
@@ -252,6 +248,7 @@ impl Flow for TableFlow {
         }
 
         let inline_size_computer = InternalTable;
+
         inline_size_computer.compute_used_inline_size(&mut self.block_flow,
                                                       layout_context,
                                                       containing_block_inline_size);
@@ -260,6 +257,7 @@ impl Flow for TableFlow {
         let padding_and_borders = self.block_flow.fragment.border_padding.inline_start_end();
         let content_inline_size =
             self.block_flow.fragment.border_box.size.inline - padding_and_borders;
+
         match self.table_layout {
             FixedLayout => {
                 // In fixed table layout, we distribute extra space among the unspecified columns
@@ -321,6 +319,18 @@ impl Flow for TableFlow {
     fn update_late_computed_block_position_if_necessary(&mut self, block_position: Au) {
         self.block_flow.update_late_computed_block_position_if_necessary(block_position)
     }
+
+    fn build_display_list(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.build_display_list(layout_context);
+    }
+
+    fn repair_style(&mut self, new_style: &Arc<ComputedValues>) {
+        self.block_flow.repair_style(new_style)
+    }
+
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator) {
+        self.block_flow.iterate_through_fragment_bounds(iterator);
+    }
 }
 
 impl fmt::Show for TableFlow {
@@ -346,6 +356,7 @@ impl ISizeAndMarginsComputer for InternalTable {
                                                                parent_flow_inline_size,
                                                                ctx);
         let solution = self.solve_inline_size_constraints(block, &input);
+
         self.set_inline_size_constraint_solutions(block, solution);
     }
 

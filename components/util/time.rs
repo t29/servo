@@ -4,13 +4,13 @@
 
 //! Timing functions.
 
-use std_time::precise_time_ns;
 use collections::treemap::TreeMap;
 use std::comm::{Sender, channel, Receiver};
 use std::f64;
-use std::iter::AdditiveIterator;
 use std::io::timer::sleep;
+use std::iter::AdditiveIterator;
 use std::time::duration::Duration;
+use std_time::precise_time_ns;
 use task::{spawn_named};
 use url::Url;
 
@@ -27,9 +27,9 @@ impl TimeProfilerChan {
 
 #[deriving(PartialEq, Clone, PartialOrd, Eq, Ord)]
 pub struct TimerMetadata {
-    url:          String,
-    iframe:       bool,
-    first_reflow: bool,
+    url:         String,
+    iframe:      bool,
+    incremental: bool,
 }
 
 pub trait Formatable {
@@ -42,9 +42,14 @@ impl Formatable for Option<TimerMetadata> {
             // TODO(cgaebel): Center-align in the format strings as soon as rustc supports it.
             &Some(ref meta) => {
                 let url = meta.url.as_slice();
-                let first_reflow = if meta.first_reflow { "    yes" } else { "    no " };
+                let url = if url.len() > 30 {
+                    url.slice_to(30)
+                } else {
+                    url
+                };
+                let incremental = if meta.incremental { "    yes" } else { "    no " };
                 let iframe = if meta.iframe { "  yes" } else { "  no " };
-                format!(" {:14} {:9} {:30}", first_reflow, iframe, url)
+                format!(" {:14} {:9} {:30}", incremental, iframe, url)
             },
             &None =>
                 format!(" {:14} {:9} {:30}", "    N/A", "  N/A", "             N/A")
@@ -77,9 +82,9 @@ pub enum TimeProfilerCategory {
     LayoutParallelWarmupCategory,
     LayoutShapingCategory,
     LayoutDispListBuildCategory,
-    RenderingDrawingCategory,
-    RenderingPrepBuffCategory,
-    RenderingCategory,
+    PaintingPerTileCategory,
+    PaintingPrepBuffCategory,
+    PaintingCategory,
 }
 
 impl Formatable for TimeProfilerCategory {
@@ -93,7 +98,9 @@ impl Formatable for TimeProfilerCategory {
             LayoutMainCategory |
             LayoutDispListBuildCategory |
             LayoutShapingCategory |
-            LayoutDamagePropagateCategory => "+ ",
+            LayoutDamagePropagateCategory |
+            PaintingPerTileCategory |
+            PaintingPrepBuffCategory => "+ ",
             LayoutParallelWarmupCategory |
             LayoutSelectorMatchCategory |
             LayoutTreeBuilderCategory => "| + ",
@@ -112,9 +119,9 @@ impl Formatable for TimeProfilerCategory {
             LayoutParallelWarmupCategory => "Parallel Warmup",
             LayoutShapingCategory => "Shaping",
             LayoutDispListBuildCategory => "Display List Construction",
-            RenderingDrawingCategory => "Draw",
-            RenderingPrepBuffCategory => "Buffer Prep",
-            RenderingCategory => "Rendering",
+            PaintingPerTileCategory => "Painting Per Tile",
+            PaintingPrepBuffCategory => "Buffer Prep",
+            PaintingCategory => "Painting",
         };
         format!("{:s}{}", padding, name)
     }
@@ -254,7 +261,7 @@ pub fn profile<T>(category: TimeProfilerCategory,
         TimerMetadata {
             url: url.serialize(),
             iframe: iframe,
-            first_reflow: first_reflow,
+            incremental: !first_reflow,
         });
     time_profiler_chan.send(TimeMsg((category, meta), ms));
     return val;

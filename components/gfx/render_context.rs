@@ -2,29 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use display_list::{SidewaysLeft, SidewaysRight, TextDisplayItem, Upright};
 use font_context::FontContext;
 use style::computed_values::border_style;
 
-use azure::azure_hl::{B8G8R8A8, A8, Color, ColorPattern, DrawOptions, DrawSurfaceOptions, DrawTarget};
-use azure::azure_hl::{Linear, SourceOp, StrokeOptions};
-use azure::AZ_CAP_BUTT;
-use azure::AzFloat;
+use azure::azure_hl::{B8G8R8A8, A8, Color, ColorPattern, ColorPatternRef, DrawOptions};
+use azure::azure_hl::{DrawSurfaceOptions,DrawTarget, Linear, SourceOp, StrokeOptions};
+use azure::scaled_font::ScaledFont;
+use azure::{AZ_CAP_BUTT, AzDrawTargetFillGlyphs, AzFloat, struct__AzDrawOptions, struct__AzGlyph};
+use azure::{struct__AzGlyphBuffer, struct__AzPoint};
+use geom::matrix2d::Matrix2D;
 use geom::point::Point2D;
 use geom::rect::Rect;
 use geom::size::Size2D;
 use geom::side_offsets::SideOffsets2D;
-use libc::types::common::c99::uint16_t;
+use libc::types::common::c99::{uint16_t, uint32_t};
 use libc::size_t;
 use png::{RGB8, RGBA8, K8, KA8};
 use servo_net::image::base::Image;
 use servo_util::geometry::Au;
-use servo_util::opts::Opts;
+use servo_util::opts;
+use servo_util::range::Range;
+use std::num::Zero;
+use std::ptr;
 use sync::Arc;
+use text::glyph::CharIndex;
+use text::TextRun;
 
 pub struct RenderContext<'a> {
     pub draw_target: &'a DrawTarget,
     pub font_ctx: &'a mut Box<FontContext>,
-    pub opts: &'a Opts,
     /// The rectangle that this context encompasses in page coordinates.
     pub page_rect: Rect<f32>,
     /// The rectangle that this context encompasses in screen coordinates (pixels).
@@ -50,7 +57,9 @@ impl<'a> RenderContext<'a>  {
 
     pub fn draw_solid_color(&self, bounds: &Rect<Au>, color: Color) {
         self.draw_target.make_current();
-        self.draw_target.fill_rect(&bounds.to_azure_rect(), &ColorPattern::new(color), None);
+        self.draw_target.fill_rect(&bounds.to_azure_rect(),
+                                   ColorPatternRef(&ColorPattern::new(color)),
+                                   None);
     }
 
     pub fn draw_border(&self,
@@ -135,7 +144,7 @@ impl<'a> RenderContext<'a>  {
         let mut draw_options = DrawOptions::new(1.0, 0);
         draw_options.set_composition_op(SourceOp);
         self.draw_target.make_current();
-        self.draw_target.fill_rect(&rect, &pattern, Some(&draw_options));
+        self.draw_target.fill_rect(&rect, ColorPatternRef(&pattern), Some(&draw_options));
     }
 
     fn draw_border_segment(&self, direction: Direction, bounds: &Rect<Au>, border: SideOffsets2D<f32>, color: SideOffsets2D<Color>, style: SideOffsets2D<border_style::T>) {
@@ -390,6 +399,50 @@ impl<'a> RenderContext<'a>  {
         self.draw_border_path(original_bounds, direction, border, scaled_color);
     }
 
+    pub fn draw_text(&mut self,
+                     text: &TextDisplayItem,
+                     current_transform: &Matrix2D<AzFloat>) {
+        // Optimization: Don’t set a transform matrix for upright text, and pass a start point to
+        // `draw_text_into_context`.
+        //
+        // For sideways text, it’s easier to do the rotation such that its center (the baseline’s
+        // start point) is at (0, 0) coordinates.
+        let baseline_origin = match text.orientation {
+            Upright => text.baseline_origin,
+            SidewaysLeft => {
+                let x = text.baseline_origin.x.to_subpx() as AzFloat;
+                let y = text.baseline_origin.y.to_subpx() as AzFloat;
+                self.draw_target.set_transform(&current_transform.mul(&Matrix2D::new(0., -1.,
+                                                                                     1., 0.,
+                                                                                     x, y)));
+                Zero::zero()
+            }
+            SidewaysRight => {
+                let x = text.baseline_origin.x.to_subpx() as AzFloat;
+                let y = text.baseline_origin.y.to_subpx() as AzFloat;
+                self.draw_target.set_transform(&current_transform.mul(&Matrix2D::new(0., 1.,
+                                                                                     -1., 0.,
+                                                                                     x, y)));
+                Zero::zero()
+            }
+        };
+
+        self.font_ctx
+            .get_render_font_from_template(&text.text_run.font_template,
+                                           text.text_run.actual_pt_size)
+            .borrow()
+            .draw_text_into_context(self,
+                                    &*text.text_run,
+                                    &text.range,
+                                    baseline_origin,
+                                    text.text_color,
+                                    opts::get().enable_text_antialiasing);
+
+        // Undo the transform, only when we did one.
+        if text.orientation != Upright {
+            self.draw_target.set_transform(current_transform)
+        }
+    }
 }
 
 trait ToAzureRect {
@@ -417,3 +470,78 @@ impl ToSideOffsetsPx for SideOffsets2D<Au> {
                            self.left.to_nearest_px() as AzFloat)
     }
 }
+
+trait ScaledFontExtensionMethods {
+    fn draw_text_into_context(&self,
+                              rctx: &RenderContext,
+                              run: &Box<TextRun>,
+                              range: &Range<CharIndex>,
+                              baseline_origin: Point2D<Au>,
+                              color: Color,
+                              antialias: bool);
+}
+
+impl ScaledFontExtensionMethods for ScaledFont {
+    fn draw_text_into_context(&self,
+                              rctx: &RenderContext,
+                              run: &Box<TextRun>,
+                              range: &Range<CharIndex>,
+                              baseline_origin: Point2D<Au>,
+                              color: Color,
+                              antialias: bool) {
+        let target = rctx.get_draw_target();
+        let pattern = ColorPattern::new(color);
+        let azure_pattern = pattern.azure_color_pattern;
+        assert!(azure_pattern.is_not_null());
+
+        let fields = if antialias {
+            0x0200
+        } else {
+            0
+        };
+
+        let mut options = struct__AzDrawOptions {
+            mAlpha: 1f64 as AzFloat,
+            fields: fields,
+        };
+
+        let mut origin = baseline_origin.clone();
+        let mut azglyphs = vec!();
+        azglyphs.reserve(range.length().to_uint());
+
+        for (glyphs, _offset, slice_range) in run.iter_slices_for_range(range) {
+            for (_i, glyph) in glyphs.iter_glyphs_for_char_range(&slice_range) {
+                let glyph_advance = glyph.advance();
+                let glyph_offset = glyph.offset().unwrap_or(Zero::zero());
+                let azglyph = struct__AzGlyph {
+                    mIndex: glyph.id() as uint32_t,
+                    mPosition: struct__AzPoint {
+                        x: (origin.x + glyph_offset.x).to_subpx() as AzFloat,
+                        y: (origin.y + glyph_offset.y).to_subpx() as AzFloat
+                    }
+                };
+                origin = Point2D(origin.x + glyph_advance, origin.y);
+                azglyphs.push(azglyph)
+            };
+        }
+
+        let azglyph_buf_len = azglyphs.len();
+        if azglyph_buf_len == 0 { return; } // Otherwise the Quartz backend will assert.
+
+        let mut glyphbuf = struct__AzGlyphBuffer {
+            mGlyphs: azglyphs.as_mut_ptr(),
+            mNumGlyphs: azglyph_buf_len as uint32_t
+        };
+
+        unsafe {
+            // TODO(Issue #64): this call needs to move into azure_hl.rs
+            AzDrawTargetFillGlyphs(target.azure_draw_target,
+                                   self.get_ref(),
+                                   &mut glyphbuf,
+                                   azure_pattern,
+                                   &mut options,
+                                   ptr::null_mut());
+        }
+    }
+}
+

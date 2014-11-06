@@ -7,13 +7,15 @@
 //! Data associated with queues is simply a pair of unsigned integers. It is expected that a
 //! higher-level API on top of this could allow safe fork-join parallelism.
 
-use native::task::NativeTaskBuilder;
+use task::spawn_named_native;
+use task_state;
+
+use libc::funcs::posix88::unistd::usleep;
 use rand::{Rng, XorShiftRng};
 use std::mem;
 use std::rand::weak_rng;
 use std::sync::atomics::{AtomicUint, SeqCst};
 use std::sync::deque::{Abort, BufferPool, Data, Empty, Stealer, Worker};
-use std::task::TaskBuilder;
 
 /// A unit of work.
 ///
@@ -68,7 +70,9 @@ struct WorkerThread<QueueData, WorkData> {
     rng: XorShiftRng,
 }
 
-static SPIN_COUNT: uint = 1000;
+static SPIN_COUNT: u32 = 128;
+static SPINS_UNTIL_BACKOFF: u32 = 100;
+static BACKOFF_INCREMENT_IN_US: u32 = 5;
 
 impl<QueueData: Send, WorkData: Send> WorkerThread<QueueData, WorkData> {
     /// The main logic. This function starts up the worker and listens for
@@ -81,6 +85,8 @@ impl<QueueData: Send, WorkData: Send> WorkerThread<QueueData, WorkData> {
                 StopMsg => fail!("unexpected stop message"),
                 ExitMsg => return,
             };
+
+            let mut back_off_sleep = 0 as u32;
 
             // We're off!
             //
@@ -105,8 +111,16 @@ impl<QueueData: Send, WorkData: Send> WorkerThread<QueueData, WorkData> {
                                 }
                                 Data(work) => {
                                     work_unit = work;
+                                    back_off_sleep = 0 as u32;
                                     break
                                 }
+                            }
+
+                            if i > SPINS_UNTIL_BACKOFF {
+                                unsafe {
+                                    usleep(back_off_sleep as u32);
+                                }
+                                back_off_sleep += BACKOFF_INCREMENT_IN_US;
                             }
 
                             if i == SPIN_COUNT {
@@ -196,7 +210,10 @@ pub struct WorkQueue<QueueData, WorkData> {
 impl<QueueData: Send, WorkData: Send> WorkQueue<QueueData, WorkData> {
     /// Creates a new work queue and spawns all the threads associated with
     /// it.
-    pub fn new(task_name: &'static str, thread_count: uint, user_data: QueueData) -> WorkQueue<QueueData, WorkData> {
+    pub fn new(task_name: &'static str,
+               state: task_state::TaskState,
+               thread_count: uint,
+               user_data: QueueData) -> WorkQueue<QueueData, WorkData> {
         // Set up data structures.
         let (supervisor_chan, supervisor_port) = channel();
         let (mut infos, mut threads) = (vec!(), vec!());
@@ -229,11 +246,15 @@ impl<QueueData: Send, WorkData: Send> WorkQueue<QueueData, WorkData> {
         }
 
         // Spawn threads.
-        for thread in threads.into_iter() {
-            TaskBuilder::new().named(task_name).native().spawn(proc() {
-                let mut thread = thread;
-                thread.start()
-            })
+        for (i, thread) in threads.into_iter().enumerate() {
+
+            spawn_named_native(
+                format!("{} worker {}/{}", task_name, i+1, thread_count),
+                proc() {
+                    task_state::initialize(state | task_state::InWorker);
+                    let mut thread = thread;
+                    thread.start()
+                })
         }
 
         WorkQueue {

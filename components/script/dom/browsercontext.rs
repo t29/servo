@@ -4,7 +4,7 @@
 
 use dom::bindings::js::{JS, JSRef, Temporary};
 use dom::bindings::utils::{Reflectable, WindowProxyHandler};
-use dom::document::Document;
+use dom::document::{Document, DocumentHelpers};
 use dom::window::Window;
 
 use js::jsapi::JSObject;
@@ -39,7 +39,7 @@ impl BrowserContext {
 
     pub fn active_window(&self) -> Temporary<Window> {
         let doc = self.active_document().root();
-        Temporary::new(doc.window().clone())
+        doc.window()
     }
 
     pub fn window_proxy(&self) -> *mut JSObject {

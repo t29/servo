@@ -164,7 +164,7 @@ macro_rules! make_uint_setter(
 
 /// For use on non-jsmanaged types
 /// Use #[jstraceable] on JS managed types
-macro_rules! untraceable(
+macro_rules! no_jsmanaged_fields(
     ($($ty:ident),+) => (
         $(
             impl JSTraceable for $ty {
@@ -185,3 +185,29 @@ macro_rules! untraceable(
     );
 )
 
+/// These are used to generate a event handler which has no special case.
+macro_rules! define_event_handler(
+    ($handler: ident, $event_type: ident, $getter: ident, $setter: ident) => (
+        fn $getter(self) -> Option<$handler> {
+            let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
+            eventtarget.get_event_handler_common(stringify!($event_type))
+        }
+
+        fn $setter(self, listener: Option<$handler>) {
+            let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(self);
+            eventtarget.set_event_handler_common(stringify!($event_type), listener)
+        }
+    )
+)
+
+macro_rules! event_handler(
+    ($event_type: ident, $getter: ident, $setter: ident) => (
+        define_event_handler!(EventHandlerNonNull, $event_type, $getter, $setter)
+    )
+)
+
+macro_rules! error_event_handler(
+    ($event_type: ident, $getter: ident, $setter: ident) => (
+        define_event_handler!(OnErrorEventHandlerNonNull, $event_type, $getter, $setter)
+    )
+)

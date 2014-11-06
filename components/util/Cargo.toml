@@ -7,11 +7,11 @@ authors = ["The Servo Project Developers"]
 name = "util"
 path = "lib.rs"
 
-[dependencies.azure]
-git = "https://github.com/servo/rust-azure"
-
 [dependencies.geom]
 git = "https://github.com/servo/rust-geom"
+
+[dependencies.layers]
+git = "https://github.com/servo/rust-layers"
 
 [dependencies.task_info]
 path = "../../support/rust-task_info"

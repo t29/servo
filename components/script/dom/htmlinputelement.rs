@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use dom::attr::{Attr, AttrValue, UIntAttrValue};
+use dom::attr::AttrHelpers;
 use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::AttrBinding::AttrMethods;
 use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
@@ -13,7 +15,6 @@ use dom::bindings::codegen::InheritTypes::{ElementCast, HTMLElementCast, HTMLFor
 use dom::bindings::codegen::InheritTypes::{HTMLInputElementDerived, HTMLFieldSetElementDerived};
 use dom::bindings::js::{JS, JSRef, Temporary, OptionalRootable, ResultRootable};
 use dom::bindings::utils::{Reflectable, Reflector};
-use dom::attr::{AttrHelpers};
 use dom::document::{Document, DocumentHelpers};
 use dom::element::{AttributeHandlers, Element, HTMLInputElementTypeId};
 use dom::event::Event;
@@ -23,11 +24,11 @@ use dom::htmlformelement::{InputElement, FormOwner, HTMLFormElement, HTMLFormEle
 use dom::node::{DisabledStateHelpers, Node, NodeHelpers, ElementNodeTypeId, document_from_node, window_from_node};
 use dom::virtualmethods::VirtualMethods;
 
-use servo_util::str::{DOMString, parse_unsigned_integer};
+use servo_util::str::DOMString;
 use string_cache::Atom;
 
 use std::ascii::OwnedStrAsciiExt;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 static DEFAULT_SUBMIT_VALUE: &'static str = "Submit";
 static DEFAULT_RESET_VALUE: &'static str = "Reset";
@@ -49,7 +50,7 @@ pub struct HTMLInputElement {
     htmlelement: HTMLElement,
     input_type: Cell<InputType>,
     checked: Cell<bool>,
-    uncommitted_value: RefCell<Option<String>>,
+    uncommitted_value: DOMRefCell<Option<String>>,
     value: DOMRefCell<Option<String>>,
     size: Cell<u32>,
 }
@@ -68,7 +69,7 @@ impl HTMLInputElement {
             htmlelement: HTMLElement::new_inherited(HTMLInputElementTypeId, localName, prefix, document),
             input_type: Cell::new(InputText),
             checked: Cell::new(false),
-            uncommitted_value: RefCell::new(None),
+            uncommitted_value: DOMRefCell::new(None),
             value: DOMRefCell::new(None),
             size: Cell::new(DEFAULT_INPUT_SIZE),
         }
@@ -265,27 +266,30 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLInputElement> {
         Some(htmlelement as &VirtualMethods)
     }
 
-    fn after_set_attr(&self, name: &Atom, value: DOMString) {
+    fn after_set_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.after_set_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.after_set_attr(attr),
+            _ => ()
         }
 
-        let node: JSRef<Node> = NodeCast::from_ref(*self);
-        match name.as_slice() {
-            "disabled" => {
+        match attr.local_name() {
+            &atom!("disabled") => {
+                let node: JSRef<Node> = NodeCast::from_ref(*self);
                 node.set_disabled_state(true);
                 node.set_enabled_state(false);
             }
-            "checked" => {
+            &atom!("checked") => {
                 self.update_checked_state(true);
             }
-            "size" => {
-                let parsed = parse_unsigned_integer(value.as_slice().chars());
-                self.size.set(parsed.unwrap_or(DEFAULT_INPUT_SIZE));
+            &atom!("size") => {
+                match *attr.value() {
+                    UIntAttrValue(_, value) => self.size.set(value),
+                    _ => fail!("Expected a UIntAttrValue"),
+                }
                 self.force_relayout();
             }
-            "type" => {
+            &atom!("type") => {
+                let value = attr.value();
                 self.input_type.set(match value.as_slice() {
                     "button" => InputButton(None),
                     "submit" => InputButton(Some(DEFAULT_SUBMIT_VALUE)),
@@ -303,12 +307,13 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLInputElement> {
                 }
                 self.force_relayout();
             }
-            "value" => {
-                *self.value.borrow_mut() = Some(value);
+            &atom!("value") => {
+                *self.value.borrow_mut() = Some(attr.value().as_slice().to_string());
                 self.force_relayout();
             }
-            "name" => {
+            &atom!("name") => {
                 if self.input_type.get() == InputRadio {
+                    let value = attr.value();
                     self.radio_group_updated(Some(value.as_slice()));
                 }
             }
@@ -316,27 +321,27 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLInputElement> {
         }
     }
 
-    fn before_remove_attr(&self, name: &Atom, value: DOMString) {
+    fn before_remove_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.before_remove_attr(name, value),
-            _ => (),
+            Some(ref s) => s.before_remove_attr(attr),
+            _ => ()
         }
 
-        let node: JSRef<Node> = NodeCast::from_ref(*self);
-        match name.as_slice() {
-            "disabled" => {
+        match attr.local_name() {
+            &atom!("disabled") => {
+                let node: JSRef<Node> = NodeCast::from_ref(*self);
                 node.set_disabled_state(false);
                 node.set_enabled_state(true);
                 node.check_ancestors_disabled_state_for_form_control();
             }
-            "checked" => {
+            &atom!("checked") => {
                 self.update_checked_state(false);
             }
-            "size" => {
+            &atom!("size") => {
                 self.size.set(DEFAULT_INPUT_SIZE);
                 self.force_relayout();
             }
-            "type" => {
+            &atom!("type") => {
                 if self.input_type.get() == InputRadio {
                     broadcast_radio_checked(*self,
                                             self.get_radio_group()
@@ -346,16 +351,23 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLInputElement> {
                 self.input_type.set(InputText);
                 self.force_relayout();
             }
-            "value" => {
+            &atom!("value") => {
                 *self.value.borrow_mut() = None;
                 self.force_relayout();
             }
-            "name" => {
+            &atom!("name") => {
                 if self.input_type.get() == InputRadio {
                     self.radio_group_updated(None);
                 }
             }
             _ => ()
+        }
+    }
+
+    fn parse_plain_attribute(&self, name: &Atom, value: DOMString) -> AttrValue {
+        match name {
+            &atom!("size") => AttrValue::from_u32(value, DEFAULT_INPUT_SIZE),
+            _ => self.super_type().unwrap().parse_plain_attribute(name, value),
         }
     }
 

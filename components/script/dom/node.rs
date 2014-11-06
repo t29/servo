@@ -5,6 +5,7 @@
 //! The core DOM types. Defines the basic DOM hierarchy as well as all the HTML elements.
 
 use dom::attr::{Attr, AttrHelpers};
+use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::CharacterDataBinding::CharacterDataMethods;
 use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
 use dom::bindings::codegen::Bindings::ElementBinding::ElementMethods;
@@ -29,10 +30,10 @@ use dom::bindings::utils;
 use dom::bindings::utils::{Reflectable, Reflector, reflect_dom_object};
 use dom::characterdata::CharacterData;
 use dom::comment::Comment;
-use dom::document::{Document, DocumentHelpers, HTMLDocument, NonHTMLDocument};
+use dom::document::{Document, DocumentHelpers, HTMLDocument, NonHTMLDocument, NotFromParser};
 use dom::documentfragment::DocumentFragment;
 use dom::documenttype::DocumentType;
-use dom::element::{AttributeHandlers, Element, ElementTypeId};
+use dom::element::{AttributeHandlers, Element, ScriptCreated, ElementTypeId};
 use dom::element::{HTMLAnchorElementTypeId, HTMLButtonElementTypeId, ElementHelpers};
 use dom::element::{HTMLInputElementTypeId, HTMLSelectElementTypeId};
 use dom::element::{HTMLTextAreaElementTypeId, HTMLOptGroupElementTypeId};
@@ -44,9 +45,7 @@ use dom::text::Text;
 use dom::virtualmethods::{VirtualMethods, vtable_for};
 use dom::window::Window;
 use geom::rect::Rect;
-use parse::html::build_element_from_tag;
-use layout_interface::{ContentBoxResponse, ContentBoxesResponse, LayoutRPC,
-                       LayoutChan, ReapLayoutDataMsg};
+use layout_interface::{LayoutChan, ReapLayoutDataMsg};
 use devtools_traits::NodeInfo;
 use script_traits::UntrustedNodeAddress;
 use servo_util::geometry::Au;
@@ -59,7 +58,7 @@ use libc;
 use libc::{uintptr_t, c_void};
 use std::cell::{Cell, RefCell, Ref, RefMut};
 use std::default::Default;
-use std::iter::{Map, Filter};
+use std::iter::{FilterMap, Peekable};
 use std::mem;
 use style;
 use style::ComputedValues;
@@ -110,7 +109,7 @@ pub struct Node {
     /// node is finalized.
     layout_data: LayoutDataRef,
 
-    unique_id: RefCell<String>,
+    unique_id: DOMRefCell<String>,
 }
 
 impl NodeDerived for EventTarget {
@@ -200,7 +199,7 @@ pub struct LayoutDataRef {
     pub data_cell: RefCell<Option<LayoutData>>,
 }
 
-untraceable!(LayoutDataRef)
+no_jsmanaged_fields!(LayoutDataRef)
 
 impl LayoutDataRef {
     pub fn new() -> LayoutDataRef {
@@ -250,7 +249,7 @@ impl LayoutDataRef {
 }
 
 /// The different types of nodes.
-#[deriving(PartialEq)]
+#[deriving(PartialEq, Show)]
 #[jstraceable]
 pub enum NodeTypeId {
     DoctypeNodeTypeId,
@@ -380,9 +379,10 @@ impl<'a> PrivateNodeHelpers for JSRef<'a, Node> {
 
 pub trait NodeHelpers<'a> {
     fn ancestors(self) -> AncestorIterator<'a>;
-    fn children(self) -> AbstractNodeChildrenIterator<'a>;
+    fn children(self) -> NodeChildrenIterator<'a>;
+    fn rev_children(self) -> ReverseChildrenIterator<'a>;
     fn child_elements(self) -> ChildElementIterator<'a>;
-    fn following_siblings(self) -> AbstractNodeChildrenIterator<'a>;
+    fn following_siblings(self) -> NodeChildrenIterator<'a>;
     fn is_in_doc(self) -> bool;
     fn is_inclusive_ancestor_of(self, parent: JSRef<Node>) -> bool;
     fn is_parent_of(self, child: JSRef<Node>) -> bool;
@@ -441,8 +441,7 @@ pub trait NodeHelpers<'a> {
     fn debug_str(self) -> String;
 
     fn traverse_preorder(self) -> TreeIterator<'a>;
-    fn sequential_traverse_postorder(self) -> TreeIterator<'a>;
-    fn inclusively_following_siblings(self) -> AbstractNodeChildrenIterator<'a>;
+    fn inclusively_following_siblings(self) -> NodeChildrenIterator<'a>;
 
     fn to_trusted_node_address(self) -> TrustedNodeAddress;
 
@@ -621,6 +620,10 @@ impl<'a> NodeHelpers<'a> for JSRef<'a, Node> {
         // 1. Dirty self.
         self.set_has_changed(true);
 
+        if self.get_is_dirty() {
+            return
+        }
+
         // 2. Dirty descendants.
         fn dirty_subtree(node: JSRef<Node>) {
             // Stop if this subtree is already dirty.
@@ -658,21 +661,12 @@ impl<'a> NodeHelpers<'a> for JSRef<'a, Node> {
 
     /// Iterates over this node and all its descendants, in preorder.
     fn traverse_preorder(self) -> TreeIterator<'a> {
-        let mut nodes = vec!();
-        gather_abstract_nodes(self, &mut nodes, false);
-        TreeIterator::new(nodes)
+        TreeIterator::new(self)
     }
 
-    /// Iterates over this node and all its descendants, in postorder.
-    fn sequential_traverse_postorder(self) -> TreeIterator<'a> {
-        let mut nodes = vec!();
-        gather_abstract_nodes(self, &mut nodes, true);
-        TreeIterator::new(nodes)
-    }
-
-    fn inclusively_following_siblings(self) -> AbstractNodeChildrenIterator<'a> {
-        AbstractNodeChildrenIterator {
-            current_node: Some(self.clone()),
+    fn inclusively_following_siblings(self) -> NodeChildrenIterator<'a> {
+        NodeChildrenIterator {
+            current: Some(self.clone()),
         }
     }
 
@@ -680,9 +674,9 @@ impl<'a> NodeHelpers<'a> for JSRef<'a, Node> {
         self == parent || parent.ancestors().any(|ancestor| ancestor == self)
     }
 
-    fn following_siblings(self) -> AbstractNodeChildrenIterator<'a> {
-        AbstractNodeChildrenIterator {
-            current_node: self.next_sibling().root().map(|next| next.clone()),
+    fn following_siblings(self) -> NodeChildrenIterator<'a> {
+        NodeChildrenIterator {
+            current: self.next_sibling().root().map(|next| next.clone()),
         }
     }
 
@@ -698,20 +692,11 @@ impl<'a> NodeHelpers<'a> for JSRef<'a, Node> {
     }
 
     fn get_bounding_content_box(self) -> Rect<Au> {
-        let window = window_from_node(self).root();
-        let page = window.page();
-        let addr = self.to_trusted_node_address();
-
-        let ContentBoxResponse(rect) = page.layout().content_box(addr);
-        rect
+        window_from_node(self).root().page().content_box_query(self.to_trusted_node_address())
     }
 
     fn get_content_boxes(self) -> Vec<Rect<Au>> {
-        let window = window_from_node(self).root();
-        let page = window.page();
-        let addr = self.to_trusted_node_address();
-        let ContentBoxesResponse(rects) = page.layout().content_boxes(addr);
-        rects
+        window_from_node(self).root().page().content_boxes_query(self.to_trusted_node_address())
     }
 
     // http://dom.spec.whatwg.org/#dom-parentnode-queryselector
@@ -772,21 +757,22 @@ impl<'a> NodeHelpers<'a> for JSRef<'a, Node> {
         self.owner_doc().root().is_html_document()
     }
 
-    fn children(self) -> AbstractNodeChildrenIterator<'a> {
-        AbstractNodeChildrenIterator {
-            current_node: self.first_child.get().map(|node| (*node.root()).clone()),
+    fn children(self) -> NodeChildrenIterator<'a> {
+        NodeChildrenIterator {
+            current: self.first_child.get().map(|node| (*node.root()).clone()),
+        }
+    }
+
+    fn rev_children(self) -> ReverseChildrenIterator<'a> {
+        ReverseChildrenIterator {
+            current: self.last_child.get().map(|node| *node.root().deref()),
         }
     }
 
     fn child_elements(self) -> ChildElementIterator<'a> {
         self.children()
-            .filter(|node| {
-                node.is_element()
-            })
-            .map(|node| {
-                let elem: JSRef<Element> = ElementCast::to_ref(node).unwrap();
-                elem.clone()
-            })
+            .filter_map::<JSRef<Element>>(ElementCast::to_ref)
+            .peekable()
     }
 
     fn wait_until_safe_to_modify_dom(self) {
@@ -969,20 +955,33 @@ impl RawLayoutNodeHelpers for Node {
 // Iteration and traversal
 //
 
-pub type ChildElementIterator<'a> = Map<'a, JSRef<'a, Node>,
-                                        JSRef<'a, Element>,
-                                        Filter<'a, JSRef<'a, Node>, AbstractNodeChildrenIterator<'a>>>;
+pub type ChildElementIterator<'a> =
+    Peekable<JSRef<'a, Element>,
+             FilterMap<'a,
+                       JSRef<'a, Node>,
+                       JSRef<'a, Element>,
+                       NodeChildrenIterator<'a>>>;
 
-pub struct AbstractNodeChildrenIterator<'a> {
-    current_node: Option<JSRef<'a, Node>>,
+pub struct NodeChildrenIterator<'a> {
+    current: Option<JSRef<'a, Node>>,
 }
 
-impl<'a> Iterator<JSRef<'a, Node>> for AbstractNodeChildrenIterator<'a> {
+impl<'a> Iterator<JSRef<'a, Node>> for NodeChildrenIterator<'a> {
     fn next(&mut self) -> Option<JSRef<'a, Node>> {
-        let node = self.current_node.clone();
-        self.current_node = node.clone().and_then(|node| {
-            node.next_sibling().map(|node| (*node.root()).clone())
-        });
+        let node = self.current;
+        self.current = node.and_then(|node| node.next_sibling().map(|node| *node.root().deref()));
+        node
+    }
+}
+
+pub struct ReverseChildrenIterator<'a> {
+    current: Option<JSRef<'a, Node>>,
+}
+
+impl<'a> Iterator<JSRef<'a, Node>> for ReverseChildrenIterator<'a> {
+    fn next(&mut self) -> Option<JSRef<'a, Node>> {
+        let node = self.current;
+        self.current = node.and_then(|node| node.prev_sibling().map(|node| *node.root().deref()));
         node
     }
 }
@@ -993,43 +992,32 @@ pub struct AncestorIterator<'a> {
 
 impl<'a> Iterator<JSRef<'a, Node>> for AncestorIterator<'a> {
     fn next(&mut self) -> Option<JSRef<'a, Node>> {
-        if self.current.is_none() {
-            return None;
-        }
-
-        // FIXME: Do we need two clones here?
-        let x = self.current.as_ref().unwrap().clone();
-        self.current = x.parent_node().map(|node| (*node.root()).clone());
-        Some(x)
+        let node = self.current;
+        self.current = node.and_then(|node| node.parent_node().map(|node| *node.root().deref()));
+        node
     }
 }
 
-// FIXME: Do this without precomputing a vector of refs.
-// Easy for preorder; harder for postorder.
 pub struct TreeIterator<'a> {
-    nodes: Vec<JSRef<'a, Node>>,
-    index: uint,
+    stack: Vec<JSRef<'a, Node>>,
 }
 
 impl<'a> TreeIterator<'a> {
-    fn new(nodes: Vec<JSRef<'a, Node>>) -> TreeIterator<'a> {
+    fn new(root: JSRef<'a, Node>) -> TreeIterator<'a> {
+        let mut stack = vec!();
+        stack.push(root);
+
         TreeIterator {
-            nodes: nodes,
-            index: 0,
+            stack: stack,
         }
     }
 }
 
 impl<'a> Iterator<JSRef<'a, Node>> for TreeIterator<'a> {
     fn next(&mut self) -> Option<JSRef<'a, Node>> {
-        if self.index >= self.nodes.len() {
-            None
-        } else {
-            let v = self.nodes[self.index];
-            let v = v.clone();
-            self.index += 1;
-            Some(v)
-        }
+        let ret = self.stack.pop();
+        ret.map(|node| self.stack.extend(node.rev_children()));
+        ret
     }
 }
 
@@ -1056,15 +1044,13 @@ impl NodeIterator {
     }
 
     fn next_child<'b>(&self, node: JSRef<'b, Node>) -> Option<JSRef<'b, Node>> {
-        if !self.include_descendants_of_void && node.is_element() {
-            let elem: JSRef<Element> = ElementCast::to_ref(node).unwrap();
-            if elem.is_void() {
-                None
-            } else {
-                node.first_child().map(|child| (*child.root()).clone())
-            }
-        } else {
-            node.first_child().map(|child| (*child.root()).clone())
+        let skip = |element: JSRef<Element>| {
+            !self.include_descendants_of_void && element.is_void()
+        };
+
+        match ElementCast::to_ref(node) {
+            Some(element) if skip(element) => None,
+            _ => node.first_child().map(|child| (*child.root()).clone()),
         }
     }
 }
@@ -1116,18 +1102,6 @@ impl<'a> Iterator<JSRef<'a, Node>> for NodeIterator {
     }
 }
 
-fn gather_abstract_nodes<'a>(cur: JSRef<'a, Node>, refs: &mut Vec<JSRef<'a, Node>>, postorder: bool) {
-    if !postorder {
-        refs.push(cur.clone());
-    }
-    for kid in cur.children() {
-        gather_abstract_nodes(kid, refs, postorder)
-    }
-    if postorder {
-        refs.push(cur.clone());
-    }
-}
-
 /// Specifies whether children must be recursively cloned or not.
 #[deriving(PartialEq)]
 pub enum CloneChildrenFlag {
@@ -1171,7 +1145,7 @@ impl Node {
 
             layout_data: LayoutDataRef::new(),
 
-            unique_id: RefCell::new("".to_string()),
+            unique_id: DOMRefCell::new(String::new()),
         }
     }
 
@@ -1274,9 +1248,7 @@ impl Node {
                             0 => (),
                             // Step 6.1.2
                             1 => {
-                                // FIXME: change to empty() when https://github.com/mozilla/rust/issues/11218
-                                // will be fixed
-                                if parent.child_elements().count() > 0 {
+                                if !parent.child_elements().is_empty() {
                                     return Err(HierarchyRequest);
                                 }
                                 match child {
@@ -1295,9 +1267,7 @@ impl Node {
                     },
                     // Step 6.2
                     ElementNodeTypeId(_) => {
-                        // FIXME: change to empty() when https://github.com/mozilla/rust/issues/11218
-                        // will be fixed
-                        if parent.child_elements().count() > 0 {
+                        if !parent.child_elements().is_empty() {
                             return Err(HierarchyRequest);
                         }
                         match child {
@@ -1324,9 +1294,7 @@ impl Node {
                                 }
                             },
                             None => {
-                                // FIXME: change to empty() when https://github.com/mozilla/rust/issues/11218
-                                // will be fixed
-                                if parent.child_elements().count() > 0 {
+                                if !parent.child_elements().is_empty() {
                                     return Err(HierarchyRequest);
                                 }
                             },
@@ -1363,29 +1331,8 @@ impl Node {
               parent: JSRef<Node>,
               child: Option<JSRef<Node>>,
               suppress_observers: SuppressObserver) {
-        // XXX assert owner_doc
-        // Step 1-3: ranges.
-        // Step 4.
-        let mut nodes = match node.type_id() {
-            DocumentFragmentNodeTypeId => node.children().collect(),
-            _ => vec!(node.clone()),
-        };
-
-        // Step 5: DocumentFragment, mutation records.
-        // Step 6: DocumentFragment.
-        match node.type_id() {
-            DocumentFragmentNodeTypeId => {
-                for c in node.children() {
-                    Node::remove(c, node, Suppressed);
-                }
-            },
-            _ => (),
-        }
-
-        // Step 7: mutation records.
-        // Step 8.
-        for node in nodes.iter_mut() {
-            parent.add_child(*node, child);
+        fn do_insert(node: JSRef<Node>, parent: JSRef<Node>, child: Option<JSRef<Node>>) {
+            parent.add_child(node, child);
             let is_in_doc = parent.is_in_doc();
             for kid in node.traverse_preorder() {
                 let mut flags = kid.flags.get();
@@ -1398,14 +1345,47 @@ impl Node {
             }
         }
 
-        // Step 9.
-        match suppress_observers {
-            Unsuppressed => {
-                for node in nodes.iter() {
-                    node.node_inserted();
+        fn fire_observer_if_necessary(node: JSRef<Node>, suppress_observers: SuppressObserver) {
+            match suppress_observers {
+                Unsuppressed => node.node_inserted(),
+                Suppressed => ()
+            }
+        }
+
+        // XXX assert owner_doc
+        // Step 1-3: ranges.
+
+        match node.type_id() {
+            DocumentFragmentNodeTypeId => {
+                // Step 4.
+                // Step 5: DocumentFragment, mutation records.
+                // Step 6: DocumentFragment.
+                let mut kids = Vec::new();
+                for kid in node.children() {
+                    kids.push(kid.clone());
+                    Node::remove(kid, node, Suppressed);
+                }
+
+                // Step 7: mutation records.
+                // Step 8.
+                for kid in kids.iter() {
+                    do_insert((*kid).clone(), parent, child);
+                }
+
+                for kid in kids.into_iter() {
+                    fire_observer_if_necessary(kid, suppress_observers);
                 }
             }
-            Suppressed => ()
+            _ => {
+                // Step 4.
+                // Step 5: DocumentFragment, mutation records.
+                // Step 6: DocumentFragment.
+                // Step 7: mutation records.
+                // Step 8.
+                do_insert(node, parent, child);
+                // Step 9.
+                fire_observer_if_necessary(node, suppress_observers);
+            }
         }
     }
 
@@ -1526,7 +1506,7 @@ impl Node {
                 };
                 let window = document.window().root();
                 let document = Document::new(*window, Some(document.url().clone()),
-                                             is_html_doc, None);
+                                             is_html_doc, None, NotFromParser);
                 NodeCast::from_temporary(document)
             },
             ElementNodeTypeId(..) => {
@@ -1535,8 +1515,8 @@ impl Node {
                     ns: element.namespace().clone(),
                     local: element.local_name().clone()
                 };
-                let element = build_element_from_tag(name,
-                    Some(element.prefix().as_slice().to_string()), *document);
+                let element = Element::create(name,
+                    element.prefix().as_ref().map(|p| p.as_slice().to_string()), *document, ScriptCreated);
                 NodeCast::from_temporary(element)
             },
             TextNodeTypeId => {
@@ -1587,6 +1567,7 @@ impl Node {
         }
 
         // Step 5: cloning steps.
+        vtable_for(&node).cloning_steps(*copy, maybe_doc, clone_children);
 
         // Step 6.
         if clone_children == CloneChildren {
@@ -2178,7 +2159,7 @@ pub fn document_from_node<T: NodeBase+Reflectable>(derived: JSRef<T>) -> Tempora
 
 pub fn window_from_node<T: NodeBase+Reflectable>(derived: JSRef<T>) -> Temporary<Window> {
     let document = document_from_node(derived).root();
-    Temporary::new(document.window().clone())
+    document.window()
 }
 
 impl<'a> VirtualMethods for JSRef<'a, Node> {
@@ -2207,6 +2188,16 @@ impl<'a> style::TNode<'a, JSRef<'a, Element>> for JSRef<'a, Node> {
         }
 
         first_child(self).map(|node| *node.root())
+    }
+
+    fn last_child(self) -> Option<JSRef<'a, Node>> {
+        // FIXME(zwarich): Remove this when UFCS lands and there is a better way
+        // of disambiguating methods.
+        fn last_child<'a, T: NodeHelpers<'a>>(this: T) -> Option<Temporary<Node>> {
+            this.last_child()
+        }
+
+        last_child(self).map(|node| *node.root())
     }
 
     fn prev_sibling(self) -> Option<JSRef<'a, Node>> {

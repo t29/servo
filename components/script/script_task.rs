@@ -5,18 +5,19 @@
 //! The script task is the task that owns the DOM in memory, runs JavaScript, and spawns parsing
 //! and layout tasks.
 
-use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
+use dom::bindings::cell::DOMRefCell;
+use dom::bindings::codegen::Bindings::DocumentBinding::{DocumentMethods, DocumentReadyStateValues};
 use dom::bindings::codegen::Bindings::DOMRectBinding::DOMRectMethods;
 use dom::bindings::codegen::Bindings::ElementBinding::ElementMethods;
+use dom::bindings::codegen::Bindings::EventTargetBinding::EventTargetMethods;
 use dom::bindings::codegen::InheritTypes::{EventTargetCast, NodeCast, EventCast, ElementCast};
 use dom::bindings::conversions;
 use dom::bindings::conversions::{FromJSValConvertible, Empty};
 use dom::bindings::global;
 use dom::bindings::js::{JS, JSRef, RootCollection, Temporary, OptionalRootable};
 use dom::bindings::trace::JSTraceable;
-use dom::bindings::utils::Reflectable;
 use dom::bindings::utils::{wrap_for_same_compartment, pre_wrap};
-use dom::document::{Document, HTMLDocument, DocumentHelpers};
+use dom::document::{Document, HTMLDocument, DocumentHelpers, FromParser};
 use dom::element::{Element, HTMLButtonElementTypeId, HTMLInputElementTypeId};
 use dom::element::{HTMLSelectElementTypeId, HTMLTextAreaElementTypeId, HTMLOptionElementTypeId};
 use dom::event::{Event, Bubbles, DoesNotBubble, Cancelable, NotCancelable};
@@ -27,8 +28,8 @@ use dom::node::{ElementNodeTypeId, Node, NodeHelpers};
 use dom::window::{Window, WindowHelpers};
 use dom::worker::{Worker, TrustedWorkerAddress};
 use dom::xmlhttprequest::{TrustedXHRAddress, XMLHttpRequest, XHRProgress};
-use parse::html::{InputString, InputUrl, HtmlParserResult, HtmlDiscoveredScript, parse_html};
-use layout_interface::{ScriptLayoutChan, LayoutChan, ReflowForDisplay};
+use parse::html::{InputString, InputUrl, parse_html};
+use layout_interface::{ScriptLayoutChan, LayoutChan, NoQuery, ReflowForDisplay};
 use layout_interface;
 use page::{Page, IterablePage, Frame};
 use timers::TimerId;
@@ -52,19 +53,19 @@ use servo_net::resource_task::ResourceTask;
 use servo_util::geometry::to_frac_px;
 use servo_util::smallvec::{SmallVec1, SmallVec};
 use servo_util::task::spawn_named_with_send_on_failure;
+use servo_util::task_state;
 
 use geom::point::Point2D;
 use js::jsapi::{JS_SetWrapObjectCallbacks, JS_SetGCZeal, JS_DEFAULT_ZEAL_FREQ, JS_GC};
 use js::jsapi::{JSContext, JSRuntime, JSTracer};
 use js::jsapi::{JS_SetGCParameter, JSGC_MAX_BYTES};
+use js::jsapi::{JS_SetGCCallback, JSGCStatus, JSGC_BEGIN, JSGC_END};
 use js::rust::{Cx, RtUtils};
-use js::rust::with_compartment;
 use js;
 use url::Url;
 
 use libc::size_t;
 use std::any::{Any, AnyRefExt};
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::comm::{channel, Sender, Receiver, Select};
 use std::mem::replace;
@@ -99,6 +100,8 @@ pub enum ScriptMsg {
     ExitWindowMsg(PipelineId),
     /// Notifies the script of progress on a fetch (dispatched to all tasks).
     XHRProgressMsg(TrustedXHRAddress, XHRProgress),
+    /// Releases one reference to the XHR object (dispatched to all tasks).
+    XHRReleaseMsg(TrustedXHRAddress),
     /// Message sent through Worker.postMessage (only dispatched to
     /// DedicatedWorkerGlobalScope).
     DOMMessage(*mut u64, size_t),
@@ -112,7 +115,7 @@ pub enum ScriptMsg {
 #[deriving(Clone)]
 pub struct ScriptChan(pub Sender<ScriptMsg>);
 
-untraceable!(ScriptChan)
+no_jsmanaged_fields!(ScriptChan)
 
 impl ScriptChan {
     /// Creates a new script chan.
@@ -143,7 +146,7 @@ impl Drop for StackRootTLS {
 /// FIXME: Rename to `Page`, following WebKit?
 pub struct ScriptTask {
     /// A handle to the information pertaining to page layout
-    page: RefCell<Rc<Page>>,
+    page: DOMRefCell<Rc<Page>>,
     /// A handle to the image cache task.
     image_cache_task: ImageCacheTask,
     /// A handle to the resource task.
@@ -165,7 +168,7 @@ pub struct ScriptTask {
     /// For communicating load url messages to the constellation
     constellation_chan: ConstellationChan,
     /// A handle to the compositor for communicating ready state messages.
-    compositor: Box<ScriptListener+'static>,
+    compositor: DOMRefCell<Box<ScriptListener+'static>>,
 
     /// For providing instructions to an optional devtools server.
     devtools_chan: Option<DevtoolsControlChan>,
@@ -176,9 +179,9 @@ pub struct ScriptTask {
     /// The JavaScript runtime.
     js_runtime: js::rust::rt,
     /// The JSContext.
-    js_context: RefCell<Option<Rc<Cx>>>,
+    js_context: DOMRefCell<Option<Rc<Cx>>>,
 
-    mouse_over_targets: RefCell<Option<Vec<JS<Node>>>>
+    mouse_over_targets: DOMRefCell<Option<Vec<JS<Node>>>>
 }
 
 /// In the event of task failure, all data on the stack runs its destructor. However, there
@@ -245,25 +248,25 @@ impl ScriptTaskFactory for ScriptTask {
         box pair.sender() as Box<Any+Send>
     }
 
-    fn create<C:ScriptListener + Send + 'static>(
-                  _phantom: Option<&mut ScriptTask>,
-                  id: PipelineId,
-                  compositor: Box<C>,
-                  layout_chan: &OpaqueScriptLayoutChannel,
-                  control_chan: ScriptControlChan,
-                  control_port: Receiver<ConstellationControlMsg>,
-                  constellation_chan: ConstellationChan,
-                  failure_msg: Failure,
-                  resource_task: ResourceTask,
-                  image_cache_task: ImageCacheTask,
-                  devtools_chan: Option<DevtoolsControlChan>,
-                  window_size: WindowSizeData) {
+    fn create<C>(_phantom: Option<&mut ScriptTask>,
+                 id: PipelineId,
+                 compositor: C,
+                 layout_chan: &OpaqueScriptLayoutChannel,
+                 control_chan: ScriptControlChan,
+                 control_port: Receiver<ConstellationControlMsg>,
+                 constellation_chan: ConstellationChan,
+                 failure_msg: Failure,
+                 resource_task: ResourceTask,
+                 image_cache_task: ImageCacheTask,
+                 devtools_chan: Option<DevtoolsControlChan>,
+                 window_size: WindowSizeData)
+                 where C: ScriptListener + Send + 'static {
         let ConstellationChan(const_chan) = constellation_chan.clone();
         let (script_chan, script_port) = channel();
         let layout_chan = LayoutChan(layout_chan.sender());
-        spawn_named_with_send_on_failure("ScriptTask", proc() {
+        spawn_named_with_send_on_failure("ScriptTask", task_state::Script, proc() {
             let script_task = ScriptTask::new(id,
-                                              compositor as Box<ScriptListener>,
+                                              box compositor as Box<ScriptListener>,
                                               layout_chan,
                                               script_port,
                                               ScriptChan(script_chan),
@@ -280,6 +283,16 @@ impl ScriptTaskFactory for ScriptTask {
             // This must always be the very last operation performed before the task completes
             failsafe.neuter();
         }, FailureMsg(failure_msg), const_chan, false);
+    }
+}
+
+unsafe extern "C" fn debug_gc_callback(rt: *mut JSRuntime, status: JSGCStatus) {
+    js::rust::gc_callback(rt, status);
+
+    match status {
+        JSGC_BEGIN => task_state::enter(task_state::InGC),
+        JSGC_END   => task_state::exit(task_state::InGC),
+        _ => (),
     }
 }
 
@@ -327,7 +340,7 @@ impl ScriptTask {
         });
 
         ScriptTask {
-            page: RefCell::new(Rc::new(page)),
+            page: DOMRefCell::new(Rc::new(page)),
 
             image_cache_task: img_cache_task,
             resource_task: resource_task,
@@ -337,13 +350,13 @@ impl ScriptTask {
             control_chan: control_chan,
             control_port: control_port,
             constellation_chan: constellation_chan,
-            compositor: compositor,
+            compositor: DOMRefCell::new(compositor),
             devtools_chan: devtools_chan,
             devtools_port: devtools_receiver,
 
             js_runtime: js_runtime,
-            js_context: RefCell::new(Some(js_context)),
-            mouse_over_targets: RefCell::new(None)
+            js_context: DOMRefCell::new(Some(js_context)),
+            mouse_over_targets: DOMRefCell::new(None)
         }
     }
 
@@ -372,6 +385,13 @@ impl ScriptTask {
         js_context.set_logging_error_reporter();
         unsafe {
             JS_SetGCZeal((*js_context).ptr, 0, JS_DEFAULT_ZEAL_FREQ);
+        }
+
+        // Needed for debug assertions about whether GC is running.
+        if !cfg!(ndebug) {
+            unsafe {
+                JS_SetGCCallback(js_runtime.ptr, Some(debug_gc_callback));
+            }
         }
 
         (js_runtime, js_context)
@@ -512,7 +532,8 @@ impl ScriptTask {
                 FromConstellation(ExitPipelineMsg(id)) => if self.handle_exit_pipeline_msg(id) { return false },
                 FromScript(ExitWindowMsg(id)) => self.handle_exit_window_msg(id),
                 FromConstellation(ResizeMsg(..)) => fail!("should have handled ResizeMsg already"),
-                FromScript(XHRProgressMsg(addr, progress)) => XMLHttpRequest::handle_xhr_progress(addr, progress),
+                FromScript(XHRProgressMsg(addr, progress)) => XMLHttpRequest::handle_progress(addr, progress),
+                FromScript(XHRReleaseMsg(addr)) => XMLHttpRequest::handle_release(addr),
                 FromScript(DOMMessage(..)) => fail!("unexpected message"),
                 FromScript(WorkerPostMessage(addr, data, nbytes)) => Worker::handle_message(addr, data, nbytes),
                 FromScript(WorkerRelease(addr)) => Worker::handle_release(addr),
@@ -650,7 +671,7 @@ impl ScriptTask {
             *layout_join_port = None;
         }
 
-        self.compositor.set_ready_state(pipeline_id, FinishedLoading);
+        self.compositor.borrow_mut().set_ready_state(pipeline_id, FinishedLoading);
 
         if page.pending_reflows.get() > 0 {
             page.pending_reflows.set(0);
@@ -688,7 +709,7 @@ impl ScriptTask {
         // TODO(tkuehn): currently there is only one window,
         // so this can afford to be naive and just shut down the
         // compositor. In the future it'll need to be smarter.
-        self.compositor.close();
+        self.compositor.borrow_mut().close();
     }
 
     /// Handles a request to exit the script task and shut down layout.
@@ -750,7 +771,7 @@ impl ScriptTask {
                                  page.clone(),
                                  self.chan.clone(),
                                  self.control_chan.clone(),
-                                 self.compositor.dup(),
+                                 self.compositor.borrow_mut().dup(),
                                  self.image_cache_task.clone()).root();
         let doc_url = if is_javascript {
             let doc_url = last_url.unwrap_or_else(|| {
@@ -762,11 +783,11 @@ impl ScriptTask {
             url.clone()
         };
         let document = Document::new(*window, Some(doc_url), HTMLDocument,
-                                     None).root();
+                                     None, FromParser).root();
 
         window.init_browser_context(*document);
 
-        self.compositor.set_ready_state(pipeline_id, Loading);
+        self.compositor.borrow_mut().set_ready_state(pipeline_id, Loading);
 
         let parser_input = if !is_javascript {
             InputUrl(url.clone())
@@ -777,13 +798,6 @@ impl ScriptTask {
             InputString(strval.unwrap_or("".to_string()))
         };
 
-        // Parse HTML.
-        //
-        // Note: We can parse the next document in parallel with any previous documents.
-        let HtmlParserResult { discovery_port }
-            = parse_html(&*page, *document, parser_input, self.resource_task.clone(),
-                Some(load_data));
-
         {
             // Create the root frame.
             let mut frame = page.mut_frame();
@@ -793,21 +807,9 @@ impl ScriptTask {
             });
         }
 
-        // Send style sheets over to layout.
-        //
-        // FIXME: These should be streamed to layout as they're parsed. We don't need to stop here
-        // in the script task.
+        parse_html(&*page, *document, parser_input, self.resource_task.clone(), Some(load_data));
 
-        let mut js_scripts = None;
-        loop {
-            match discovery_port.recv_opt() {
-                Ok(HtmlDiscoveredScript(scripts)) => {
-                    assert!(js_scripts.is_none());
-                    js_scripts = Some(scripts);
-                }
-                Err(()) => break
-            }
-        }
+        document.set_ready_state(DocumentReadyStateValues::Interactive);
 
         // Kick off the initial reflow of the page.
         debug!("kicking off initial reflow of {}", url);
@@ -816,7 +818,7 @@ impl ScriptTask {
             let document_as_node = NodeCast::from_ref(document_js_ref);
             document.content_changed(document_as_node);
         }
-        window.flush_layout(ReflowForDisplay);
+        window.flush_layout();
 
         {
             // No more reflow required
@@ -824,36 +826,20 @@ impl ScriptTask {
             *page_url = Some((url.clone(), false));
         }
 
-        // Receive the JavaScript scripts.
-        assert!(js_scripts.is_some());
-        let js_scripts = js_scripts.take().unwrap();
-        debug!("js_scripts: {:?}", js_scripts);
-
-        with_compartment((**cx).ptr, window.reflector().get_jsobject(), || {
-            // Evaluate every script in the document.
-            for file in js_scripts.iter() {
-                let global_obj = window.reflector().get_jsobject();
-                let filename = match file.url {
-                    None => String::new(),
-                    Some(ref url) => url.serialize(),
-                };
-
-                //FIXME: this should have some kind of error handling, or explicitly
-                //       drop an exception on the floor.
-                match cx.evaluate_script(global_obj, file.data.clone(), filename, 1) {
-                    Ok(_) => (),
-                    Err(_) => println!("evaluate_script failed")
-                }
-
-                window.flush_layout(ReflowForDisplay);
-            }
-        });
+        // https://html.spec.whatwg.org/multipage/#the-end step 4
+        let event = Event::new(&global::Window(*window), "DOMContentLoaded".to_string(),
+                               DoesNotBubble, NotCancelable).root();
+        let doctarget: JSRef<EventTarget> = EventTargetCast::from_ref(*document);
+        let _ = doctarget.DispatchEvent(*event);
 
         // We have no concept of a document loader right now, so just dispatch the
         // "load" event as soon as we've finished executing all scripts parsed during
         // the initial load.
+
+        // https://html.spec.whatwg.org/multipage/#the-end step 7
+        document.set_ready_state(DocumentReadyStateValues::Complete);
+
         let event = Event::new(&global::Window(*window), "load".to_string(), DoesNotBubble, NotCancelable).root();
-        let doctarget: JSRef<EventTarget> = EventTargetCast::from_ref(*document);
         let wintarget: JSRef<EventTarget> = EventTargetCast::from_ref(*window);
         let _ = wintarget.dispatch_event_with_target(Some(doctarget), *event);
 
@@ -872,7 +858,7 @@ impl ScriptTask {
         // Really what needs to happen is that this needs to go through layout to ask which
         // layer the element belongs to, and have it send the scroll message to the
         // compositor.
-        self.compositor.scroll_fragment_point(pipeline_id, LayerId::null(), point);
+        self.compositor.borrow_mut().scroll_fragment_point(pipeline_id, LayerId::null(), point);
     }
 
     fn force_reflow(&self, page: &Page) {
@@ -887,7 +873,10 @@ impl ScriptTask {
         }
 
         page.damage();
-        page.reflow(ReflowForDisplay, self.control_chan.clone(), &*self.compositor);
+        page.reflow(ReflowForDisplay,
+                    self.control_chan.clone(),
+                    &mut **self.compositor.borrow_mut(),
+                    NoQuery);
     }
 
     /// This is the main entry point for receiving and dispatching DOM events.
@@ -986,7 +975,7 @@ impl ScriptTask {
                                         let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(node);
                                         let _ = eventtarget.dispatch_event_with_target(None, *event);
 
-                                        window.flush_layout(ReflowForDisplay);
+                                        window.flush_layout();
                                     }
                                     None => {}
                                 }

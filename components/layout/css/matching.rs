@@ -2,12 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// High-level interface to CSS selector matching.
+//! High-level interface to CSS selector matching.
 
 use css::node_style::StyledNode;
+use incremental::{mod, RestyleDamage};
 use util::{LayoutDataAccess, LayoutDataWrapper};
-use wrapper::{LayoutElement, LayoutNode};
-use wrapper::{TLayoutNode};
+use wrapper::{LayoutElement, LayoutNode, TLayoutNode};
 
 use script::dom::node::{TextNodeTypeId};
 use servo_util::bloom::BloomFilter;
@@ -17,10 +17,10 @@ use servo_util::arc_ptr_eq;
 use std::mem;
 use std::hash::{Hash, sip};
 use std::slice::Items;
-use style::{After, Before, ComputedValues, DeclarationBlock, Stylist, TElement, TNode};
-use style::cascade;
+use string_cache::{Atom, Namespace};
+use style::{mod, After, Before, ComputedValues, DeclarationBlock, Stylist, TElement, TNode};
+use style::{AttrIsEqualMode, AttrIsPresentMode, CommonStyleAffectingAttributes, cascade};
 use sync::Arc;
-use string_cache::Atom;
 
 pub struct ApplicableDeclarations {
     pub normal: SmallVec16<DeclarationBlock>,
@@ -148,6 +148,29 @@ pub struct StyleSharingCandidateCache {
     cache: LRUCache<StyleSharingCandidate,()>,
 }
 
+fn create_common_style_affecting_attributes_from_element(element: &LayoutElement)
+                                                         -> CommonStyleAffectingAttributes {
+    let mut flags = CommonStyleAffectingAttributes::empty();
+    for attribute_info in style::common_style_affecting_attributes().iter() {
+        match attribute_info.mode {
+            AttrIsPresentMode(flag) => {
+                if element.get_attr(&ns!(""), &attribute_info.atom).is_some() {
+                    flags.insert(flag)
+                }
+            }
+            AttrIsEqualMode(target_value, flag) => {
+                match element.get_attr(&ns!(""), &attribute_info.atom) {
+                    Some(element_value) if element_value == target_value => {
+                        flags.insert(flag)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    flags
+}
+
 #[deriving(Clone)]
 pub struct StyleSharingCandidate {
     pub style: Arc<ComputedValues>,
@@ -155,6 +178,9 @@ pub struct StyleSharingCandidate {
     pub local_name: Atom,
     // FIXME(pcwalton): Should be a list of atoms instead.
     pub class: Option<String>,
+    pub namespace: Namespace,
+    pub common_style_affecting_attributes: CommonStyleAffectingAttributes,
+    pub link: bool,
 }
 
 impl PartialEq for StyleSharingCandidate {
@@ -162,7 +188,10 @@ impl PartialEq for StyleSharingCandidate {
         arc_ptr_eq(&self.style, &other.style) &&
             arc_ptr_eq(&self.parent_style, &other.parent_style) &&
             self.local_name == other.local_name &&
-            self.class == other.class
+            self.class == other.class &&
+            self.link == other.link &&
+            self.namespace == other.namespace &&
+            self.common_style_affecting_attributes == other.common_style_affecting_attributes
     }
 }
 
@@ -213,6 +242,10 @@ impl StyleSharingCandidate {
             local_name: element.get_local_name().clone(),
             class: element.get_attr(&ns!(""), &atom!("class"))
                           .map(|string| string.to_string()),
+            link: element.get_link().is_some(),
+            namespace: (*element.get_namespace()).clone(),
+            common_style_affecting_attributes:
+                   create_common_style_affecting_attributes_from_element(&element)
         })
     }
 
@@ -230,6 +263,44 @@ impl StyleSharingCandidate {
             }
             (&Some(_), Some(_)) | (&None, None) => {}
         }
+
+        if *element.get_namespace() != self.namespace {
+            return false
+        }
+
+        for attribute_info in style::common_style_affecting_attributes().iter() {
+            match attribute_info.mode {
+                AttrIsPresentMode(flag) => {
+                    if self.common_style_affecting_attributes.contains(flag) !=
+                            element.get_attr(&ns!(""), &attribute_info.atom).is_some() {
+                        return false
+                    }
+                }
+                AttrIsEqualMode(target_value, flag) => {
+                    match element.get_attr(&ns!(""), &attribute_info.atom) {
+                        Some(ref element_value) if self.common_style_affecting_attributes
+                                                       .contains(flag) &&
+                                                       *element_value != target_value => {
+                            return false
+                        }
+                        Some(_) if !self.common_style_affecting_attributes.contains(flag) => {
+                            return false
+                        }
+                        None if self.common_style_affecting_attributes.contains(flag) => {
+                            return false
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if element.get_link().is_some() != self.link {
+            return false
+        }
+
+        // TODO(pcwalton): We don't support visited links yet, but when we do there will need to
+        // be some logic here.
 
         true
     }
@@ -266,8 +337,8 @@ pub enum StyleSharingResult<'ln> {
     /// is shareable at all.
     CannotShare(bool),
     /// The node's style can be shared. The integer specifies the index in the LRU cache that was
-    /// hit.
-    StyleWasShared(uint),
+    /// hit and the damage that was done.
+    StyleWasShared(uint, RestyleDamage),
 }
 
 pub trait MatchMethods {
@@ -312,7 +383,8 @@ trait PrivateMatchMethods {
                                    style: &mut Option<Arc<ComputedValues>>,
                                    applicable_declarations_cache: &mut
                                    ApplicableDeclarationsCache,
-                                   shareable: bool);
+                                   shareable: bool)
+                                   -> RestyleDamage;
 
     fn share_style_with_candidate_if_possible(&self,
                                               parent_node: Option<LayoutNode>,
@@ -327,7 +399,8 @@ impl<'ln> PrivateMatchMethods for LayoutNode<'ln> {
                                    style: &mut Option<Arc<ComputedValues>>,
                                    applicable_declarations_cache: &mut
                                    ApplicableDeclarationsCache,
-                                   shareable: bool) {
+                                   shareable: bool)
+                                   -> RestyleDamage {
         let this_style;
         let cacheable;
         match parent_style {
@@ -359,7 +432,10 @@ impl<'ln> PrivateMatchMethods for LayoutNode<'ln> {
             applicable_declarations_cache.insert(applicable_declarations, this_style.clone());
         }
 
+        // Calculate style difference and write.
+        let damage = incremental::compute_damage(style, &*this_style);
         *style = Some(this_style);
+        damage
     }
 
 
@@ -453,8 +529,9 @@ impl<'ln> MatchMethods for LayoutNode<'ln> {
                     let mut layout_data_ref = self.mutate_layout_data();
                     let shared_data = &mut layout_data_ref.as_mut().unwrap().shared_data;
                     let style = &mut shared_data.style;
+                    let damage = incremental::compute_damage(style, &*shared_style);
                     *style = Some(shared_style);
-                    return StyleWasShared(i)
+                    return StyleWasShared(i, damage)
                 }
                 None => {}
             }
@@ -516,16 +593,10 @@ impl<'ln> MatchMethods for LayoutNode<'ln> {
         let parent_style = match parent {
             None => None,
             Some(parent_node) => {
-                let parent_layout_data = parent_node.borrow_layout_data_unchecked();
-                match *parent_layout_data {
-                    None => fail!("no parent data?!"),
-                    Some(ref parent_layout_data) => {
-                        match parent_layout_data.shared_data.style {
-                            None => fail!("parent hasn't been styled yet?!"),
-                            Some(ref style) => Some(style),
-                        }
-                    }
-                }
+                let parent_layout_data_ref = parent_node.borrow_layout_data_unchecked();
+                let parent_layout_data = (&*parent_layout_data_ref).as_ref().expect("no parent data!?");
+                let parent_style = parent_layout_data.shared_data.style.as_ref().expect("parent hasn't been styled yet!");
+                Some(parent_style)
             }
         };
 
@@ -543,28 +614,29 @@ impl<'ln> MatchMethods for LayoutNode<'ln> {
                         layout_data.shared_data.style = Some(cloned_parent_style);
                     }
                     _ => {
-                        self.cascade_node_pseudo_element(
+                        let mut damage = self.cascade_node_pseudo_element(
                             parent_style,
                             applicable_declarations.normal.as_slice(),
                             &mut layout_data.shared_data.style,
                             applicable_declarations_cache,
                             applicable_declarations.normal_shareable);
                         if applicable_declarations.before.len() > 0 {
-                               self.cascade_node_pseudo_element(
-                                   Some(layout_data.shared_data.style.as_ref().unwrap()),
-                                   applicable_declarations.before.as_slice(),
-                                   &mut layout_data.data.before_style,
-                                   applicable_declarations_cache,
-                                   false);
+                           damage = damage | self.cascade_node_pseudo_element(
+                               Some(layout_data.shared_data.style.as_ref().unwrap()),
+                               applicable_declarations.before.as_slice(),
+                               &mut layout_data.data.before_style,
+                               applicable_declarations_cache,
+                               false);
                         }
                         if applicable_declarations.after.len() > 0 {
-                               self.cascade_node_pseudo_element(
-                                   Some(layout_data.shared_data.style.as_ref().unwrap()),
-                                   applicable_declarations.after.as_slice(),
-                                   &mut layout_data.data.after_style,
-                                   applicable_declarations_cache,
-                                   false);
+                           damage = damage | self.cascade_node_pseudo_element(
+                               Some(layout_data.shared_data.style.as_ref().unwrap()),
+                               applicable_declarations.after.as_slice(),
+                               &mut layout_data.data.after_style,
+                               applicable_declarations_cache,
+                               false);
                         }
+                        layout_data.data.restyle_damage = damage;
                     }
                 }
             }

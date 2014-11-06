@@ -6,25 +6,27 @@
 
 use css::node_style::StyledNode;
 use context::LayoutContext;
+use display_list_builder::FragmentDisplayListBuilding;
 use floats::{FloatLeft, Floats, PlacementInfo};
 use flow::{BaseFlow, FlowClass, Flow, InlineFlowClass, MutableFlowUtils};
 use flow;
 use fragment::{Fragment, InlineAbsoluteHypotheticalFragment, InlineBlockFragment};
-use fragment::{ScannedTextFragment, ScannedTextFragmentInfo, SplitInfo};
-use incremental::RestyleDamage;
+use fragment::{FragmentBoundsIterator, ScannedTextFragment, ScannedTextFragmentInfo};
+use fragment::SplitInfo;
+use incremental::{Reflow, ReflowOutOfFlow};
 use layout_debug;
 use model::IntrinsicISizesContribution;
 use text;
-use wrapper::ThreadSafeLayoutNode;
 
 use collections::{Deque, RingBuf};
 use geom::{Rect, Size2D};
-use gfx::display_list::{ContentLevel, DisplayList};
+use gfx::display_list::ContentLevel;
 use gfx::font::FontMetrics;
 use gfx::font_context::FontContext;
 use gfx::text::glyph::CharIndex;
 use servo_util::geometry::Au;
-use servo_util::logical_geometry::{LogicalRect, LogicalSize};
+use servo_util::logical_geometry::{LogicalRect, LogicalSize, WritingMode};
+use servo_util::opts;
 use servo_util::range::{IntRangeIndex, Range, RangeIndex};
 use servo_util::arc_ptr_eq;
 use std::cmp::max;
@@ -390,7 +392,11 @@ impl LineBreaker {
     }
 
     fn try_append_to_line_by_new_line(&mut self, in_fragment: Fragment) -> bool {
-        if in_fragment.new_line_pos.len() == 0 {
+        let no_newline_positions = match in_fragment.newline_positions() {
+            None => true,
+            Some(ref positions) => positions.is_empty(),
+        };
+        if no_newline_positions {
             debug!("LineBreaker: Did not find a new-line character, so pushing the fragment to \
                    the line without splitting.");
             self.push_fragment_to_line(in_fragment);
@@ -405,13 +411,14 @@ impl LineBreaker {
         let writing_mode = self.floats.writing_mode;
 
         let split_fragment = |split: SplitInfo| {
-            let info =
-                ScannedTextFragmentInfo::new(
-                    run.clone(),
-                    split.range,
-                    in_fragment.border_box.size.inline);
-            let size = LogicalSize::new(
-                writing_mode, split.inline_size, in_fragment.border_box.size.block);
+            let info = box ScannedTextFragmentInfo::new(run.clone(),
+                                                        split.range,
+                                                        (*in_fragment.newline_positions()
+                                                                     .unwrap()).clone(),
+                                                        in_fragment.border_box.size);
+            let size = LogicalSize::new(writing_mode,
+                                        split.inline_size,
+                                        in_fragment.border_box.size.block);
             in_fragment.transform(size, info)
         };
 
@@ -419,14 +426,14 @@ impl LineBreaker {
                 to the line.");
         let mut inline_start = split_fragment(inline_start);
         inline_start.save_new_line_pos();
-        inline_start.new_line_pos = vec![];
+        *inline_start.newline_positions_mut().unwrap() = vec![];
         self.push_fragment_to_line(inline_start);
 
         for inline_end in inline_end.into_iter() {
             debug!("LineBreaker: Deferring the fragment to the inline_end of the new-line \
                    character to the line.");
             let mut inline_end = split_fragment(inline_end);
-            inline_end.new_line_pos.remove(0);
+            inline_end.newline_positions_mut().unwrap().remove(0);
             self.work_list.push_front(inline_end);
         }
 
@@ -496,11 +503,10 @@ impl LineBreaker {
                                                                 line_is_empty);
         match split.map(|(inline_start, inline_end, run)| {
             let split_fragment = |split: SplitInfo| {
-                let info =
-                    ScannedTextFragmentInfo::new(
-                        run.clone(),
-                        split.range,
-                        in_fragment.border_box.size.inline);
+                let info = box ScannedTextFragmentInfo::new(run.clone(),
+                                                            split.range,
+                                                            Vec::new(),
+                                                            in_fragment.border_box.size);
                 let size = LogicalSize::new(self.floats.writing_mode,
                                             split.inline_size,
                                             in_fragment.border_box.size.block);
@@ -620,57 +626,6 @@ impl InlineFragments {
         self.fragments.get_mut(index)
     }
 
-    /// Strips ignorable whitespace from the start of a list of fragments.
-    ///
-    /// Returns some damage that must be added to the `InlineFlow`.
-    pub fn strip_ignorable_whitespace_from_start(&mut self) -> RestyleDamage {
-        if self.is_empty() { return RestyleDamage::empty() } // Fast path
-
-        // FIXME (rust#16151): This can be reverted back to using skip_while once
-        // the upstream bug is fixed.
-        let mut fragments = mem::replace(&mut self.fragments, vec![]).into_iter();
-        let mut new_fragments = Vec::new();
-        let mut skipping = true;
-        let mut damage = RestyleDamage::empty();
-
-        for fragment in fragments {
-            if skipping && fragment.is_ignorable_whitespace() {
-                damage = RestyleDamage::all();
-                debug!("stripping ignorable whitespace from start");
-                continue
-            }
-
-            skipping = false;
-            new_fragments.push(fragment);
-        }
-
-        self.fragments = new_fragments;
-        damage
-    }
-
-    /// Strips ignorable whitespace from the end of a list of fragments.
-    ///
-    /// Returns some damage that must be added to the `InlineFlow`.
-    pub fn strip_ignorable_whitespace_from_end(&mut self) -> RestyleDamage {
-        if self.is_empty() {
-            return RestyleDamage::empty();
-        }
-
-        let mut damage = RestyleDamage::empty();
-
-        let mut new_fragments = self.fragments.clone();
-        while new_fragments.len() > 0 &&
-                new_fragments.as_slice().last().as_ref().unwrap().is_ignorable_whitespace() {
-            debug!("stripping ignorable whitespace from end");
-            damage = RestyleDamage::all();
-            drop(new_fragments.pop());
-        }
-
-
-        self.fragments = new_fragments;
-        damage
-    }
-
     /// This function merges previously-line-broken fragments back into their
     /// original, pre-line-breaking form.
     pub fn merge_broken_lines(&mut self) {
@@ -748,51 +703,13 @@ pub struct InlineFlow {
 }
 
 impl InlineFlow {
-    pub fn from_fragments(node: ThreadSafeLayoutNode, fragments: InlineFragments) -> InlineFlow {
+    pub fn from_fragments(fragments: InlineFragments, writing_mode: WritingMode) -> InlineFlow {
         InlineFlow {
-            base: BaseFlow::new(node),
+            base: BaseFlow::new(None, writing_mode),
             fragments: fragments,
             lines: Vec::new(),
             minimum_block_size_above_baseline: Au(0),
             minimum_depth_below_baseline: Au(0),
-        }
-    }
-
-    pub fn build_display_list_inline(&mut self, layout_context: &LayoutContext) {
-        let size = self.base.position.size.to_physical(self.base.writing_mode);
-        if !Rect(self.base.abs_position, size).intersects(&layout_context.shared.dirty) {
-            debug!("inline block (abs pos {}, size {}) didn't intersect \
-                    dirty rect two",
-                     self.base.abs_position,
-                     size);
-            return
-        }
-
-        // TODO(#228): Once we form lines and have their cached bounds, we can be smarter and
-        // not recurse on a line if nothing in it can intersect the dirty region.
-        debug!("Flow: building display list for {:u} inline fragments", self.fragments.len());
-
-        for fragment in self.fragments.fragments.iter_mut() {
-            let rel_offset = fragment.relative_position(&self.base
-                                                             .absolute_position_info
-                                                             .relative_containing_block_size);
-            let fragment_position = self.base
-                                        .abs_position
-                                        .add_size(&rel_offset.to_physical(self.base.writing_mode));
-            fragment.build_display_list(&mut self.base.display_list,
-                                        layout_context,
-                                        fragment_position,
-                                        ContentLevel,
-                                        &self.base.clip_rect);
-            match fragment.specific {
-                InlineBlockFragment(ref mut block_flow) => {
-                    let block_flow = block_flow.flow_ref.deref_mut();
-                    self.base.display_list.push_all_move(
-                        mem::replace(&mut flow::mut_base(block_flow).display_list,
-                                     DisplayList::new()));
-                }
-                _ => {}
-            }
         }
     }
 
@@ -943,7 +860,7 @@ impl InlineFlow {
             return (Au(0), Au(0))
         }
 
-        let font_style = style.get_font();
+        let font_style = style.get_font_arc();
         let font_metrics = text::font_metrics_for_style(font_context, font_style);
         let line_height = text::line_height_from_style(style, &font_metrics);
         let inline_metrics = InlineMetrics::from_font_metrics(&font_metrics, line_height);
@@ -957,7 +874,7 @@ impl InlineFlow {
             match frag.inline_context {
                 Some(ref inline_context) => {
                     for style in inline_context.styles.iter() {
-                        let font_style = style.get_font();
+                        let font_style = style.get_font_arc();
                         let font_metrics = text::font_metrics_for_style(font_context, font_style);
                         let line_height = text::line_height_from_style(&**style, &font_metrics);
                         let inline_metrics = InlineMetrics::from_font_metrics(&font_metrics,
@@ -1196,6 +1113,14 @@ impl Flow for InlineFlow {
                 line.bounds.size.block;
         } // End of `lines.each` loop.
 
+        // Assign block sizes for any inline-block descendants.
+        for kid in self.base.child_iter() {
+            if flow::base(kid).flags.is_absolutely_positioned() || kid.is_float() {
+                continue
+            }
+            kid.assign_block_size_for_inorder_child_if_necessary(layout_context);
+        }
+
         self.base.position.size.block = match self.lines.as_slice().last() {
             Some(ref last_line) => last_line.bounds.start.b + last_line.bounds.size.block,
             None => Au(0),
@@ -1205,6 +1130,8 @@ impl Flow for InlineFlow {
         self.base.floats.translate(LogicalSize::new(self.base.writing_mode,
                                                     Au(0),
                                                     -self.base.position.size.block));
+
+        self.base.restyle_damage.remove(ReflowOutOfFlow | Reflow);
     }
 
     fn compute_absolute_position(&mut self) {
@@ -1253,6 +1180,54 @@ impl Flow for InlineFlow {
     fn update_late_computed_inline_position_if_necessary(&mut self, _: Au) {}
 
     fn update_late_computed_block_position_if_necessary(&mut self, _: Au) {}
+
+    fn build_display_list(&mut self, layout_context: &LayoutContext) {
+        let size = self.base.position.size.to_physical(self.base.writing_mode);
+        if !Rect(self.base.abs_position, size).intersects(&layout_context.shared.dirty) {
+            debug!("inline block (abs pos {}, size {}) didn't intersect \
+                    dirty rect two",
+                     self.base.abs_position,
+                     size);
+            return
+        }
+
+        // TODO(#228): Once we form lines and have their cached bounds, we can be smarter and
+        // not recurse on a line if nothing in it can intersect the dirty region.
+        debug!("Flow: building display list for {:u} inline fragments", self.fragments.len());
+
+        for fragment in self.fragments.fragments.iter_mut() {
+            let fragment_origin = self.base.child_fragment_absolute_position(fragment);
+            fragment.build_display_list(&mut self.base.display_list,
+                                        layout_context,
+                                        fragment_origin,
+                                        ContentLevel,
+                                        &self.base.clip_rect);
+            match fragment.specific {
+                InlineBlockFragment(ref mut block_flow) => {
+                    let block_flow = block_flow.flow_ref.deref_mut();
+                    self.base
+                        .display_list
+                        .append_from(&mut flow::mut_base(block_flow).display_list)
+                }
+                _ => {}
+            }
+        }
+
+        if opts::get().validate_display_list_geometry {
+            self.base.validate_display_list_geometry();
+        }
+    }
+
+    fn repair_style(&mut self, _: &Arc<ComputedValues>) {}
+
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator) {
+        for fragment in self.fragments.fragments.iter() {
+            if iterator.should_process(fragment) {
+                let fragment_origin = self.base.child_fragment_absolute_position(fragment);
+                iterator.process(fragment, fragment.abs_bounds_from_origin(&fragment_origin));
+            }
+        }
+    }
 }
 
 impl fmt::Show for InlineFlow {

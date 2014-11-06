@@ -2,13 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use dom::attr::AttrValue;
+use dom::attr::Attr;
+use dom::attr::{AttrHelpers, AttrValue};
+use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::HTMLImageElementBinding;
 use dom::bindings::codegen::Bindings::HTMLImageElementBinding::HTMLImageElementMethods;
 use dom::bindings::codegen::InheritTypes::{NodeCast, ElementCast, HTMLElementCast, HTMLImageElementDerived};
 use dom::bindings::js::{JS, JSRef, Temporary};
 use dom::bindings::utils::{Reflectable, Reflector};
-use dom::document::Document;
+use dom::document::{Document, DocumentHelpers};
 use dom::element::{Element, HTMLImageElementTypeId};
 use dom::element::AttributeHandlers;
 use dom::eventtarget::{EventTarget, NodeTargetTypeId};
@@ -22,12 +24,10 @@ use string_cache::Atom;
 
 use url::{Url, UrlParser};
 
-use std::cell::RefCell;
-
 #[dom_struct]
 pub struct HTMLImageElement {
     htmlelement: HTMLElement,
-    image: RefCell<Option<Url>>,
+    image: DOMRefCell<Option<Url>>,
 }
 
 impl HTMLImageElementDerived for EventTarget {
@@ -73,7 +73,7 @@ impl HTMLImageElement {
     fn new_inherited(localName: DOMString, prefix: Option<DOMString>, document: JSRef<Document>) -> HTMLImageElement {
         HTMLImageElement {
             htmlelement: HTMLElement::new_inherited(HTMLImageElementTypeId, localName, prefix, document),
-            image: RefCell::new(None),
+            image: DOMRefCell::new(None),
         }
     }
 
@@ -90,7 +90,7 @@ pub trait LayoutHTMLImageElementHelpers {
 
 impl LayoutHTMLImageElementHelpers for JS<HTMLImageElement> {
     unsafe fn image(&self) -> Option<Url> {
-        (*self.unsafe_get()).image.borrow().clone()
+        (*self.unsafe_get()).image.borrow_for_layout().clone()
     }
 }
 
@@ -167,33 +167,38 @@ impl<'a> VirtualMethods for JSRef<'a, HTMLImageElement> {
         Some(htmlelement as &VirtualMethods)
     }
 
-    fn after_set_attr(&self, name: &Atom, value: DOMString) {
+    fn after_set_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.after_set_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.after_set_attr(attr),
+            _ => ()
         }
 
-        if "src" == name.as_slice() {
-            let window = window_from_node(*self).root();
-            let url = window.get_url();
-            self.update_image(Some((value, &url)));
+        match attr.local_name() {
+            &atom!("src") => {
+                let window = window_from_node(*self).root();
+                let url = window.get_url();
+                self.update_image(Some((attr.value().as_slice().to_string(), &url)));
+            },
+            _ => ()
         }
     }
 
-    fn before_remove_attr(&self, name: &Atom, value: DOMString) {
+    fn before_remove_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.before_remove_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.before_remove_attr(attr),
+            _ => ()
         }
 
-        if atom!("src") == *name {
-            self.update_image(None);
+        match attr.local_name() {
+            &atom!("src") => self.update_image(None),
+            _ => ()
         }
     }
 
-    fn parse_plain_attribute(&self, name: &str, value: DOMString) -> AttrValue {
+    fn parse_plain_attribute(&self, name: &Atom, value: DOMString) -> AttrValue {
         match name {
-            "width" | "height" | "hspace" | "vspace" => AttrValue::from_u32(value, 0),
+            &atom!("width") | &atom!("height") |
+            &atom!("hspace") | &atom!("vspace") => AttrValue::from_u32(value, 0),
             _ => self.super_type().unwrap().parse_plain_attribute(name, value),
         }
     }

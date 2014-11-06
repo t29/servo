@@ -7,12 +7,12 @@
 
 use std::mem::init as i;
 use std::cmp;
+use std::fmt;
 use std::intrinsics;
 use std::kinds::marker::ContravariantLifetime;
 use std::mem;
 use std::ptr;
 use std::raw::Slice;
-use rustrt::local_heap;
 use alloc::heap;
 
 // Generic code for all small vectors
@@ -57,9 +57,10 @@ pub trait SmallVecPrivate<T> {
     unsafe fn set_ptr(&mut self, new_ptr: *mut T);
 }
 
-pub trait SmallVec<T> : SmallVecPrivate<T> where T: 'static {
+pub trait SmallVec<T> : SmallVecPrivate<T> {
     fn inline_size(&self) -> uint;
     fn len(&self) -> uint;
+    fn is_empty(&self) -> bool;
     fn cap(&self) -> uint;
 
     fn spilled(&self) -> bool {
@@ -110,12 +111,13 @@ pub trait SmallVec<T> : SmallVecPrivate<T> where T: 'static {
             } else {
                 None
             };
+            let cap = self.cap();
             let inline_size = self.inline_size();
             self.set_cap(inline_size);
             self.set_len(0);
             SmallVecMoveIterator {
                 allocation: ptr_opt,
-                cap: inline_size,
+                cap: cap,
                 iter: iter,
                 lifetime: ContravariantLifetime::<'a>,
             }
@@ -169,13 +171,9 @@ pub trait SmallVec<T> : SmallVecPrivate<T> where T: 'static {
             ptr::copy_nonoverlapping_memory(new_alloc, self.begin(), self.len());
 
             if self.spilled() {
-                if intrinsics::owns_managed::<T>() {
-                    local_heap::local_free(self.ptr() as *mut u8)
-                } else {
-                    heap::deallocate(self.mut_ptr() as *mut u8,
-                                     mem::size_of::<T>() * self.cap(),
-                                     mem::min_align_of::<T>())
-                }
+                heap::deallocate(self.mut_ptr() as *mut u8,
+                                 mem::size_of::<T>() * self.cap(),
+                                 mem::min_align_of::<T>())
             } else {
                 let mut_begin: *mut T = mem::transmute(self.begin());
                 intrinsics::set_memory(mut_begin, 0, self.len())
@@ -296,11 +294,11 @@ impl<'a,T> Iterator<&'a mut T> for SmallVecMutIterator<'a,T> {
 pub struct SmallVecMoveIterator<'a,T> {
     allocation: Option<*mut u8>,
     cap: uint,
-    iter: SmallVecIterator<'static,T>,
+    iter: SmallVecIterator<'a,T>,
     lifetime: ContravariantLifetime<'a>,
 }
 
-impl<'a, T: 'static> Iterator<T> for SmallVecMoveIterator<'a,T> {
+impl<'a, T: 'a> Iterator<T> for SmallVecMoveIterator<'a,T> {
     #[inline]
     fn next(&mut self) -> Option<T> {
         unsafe {
@@ -317,7 +315,7 @@ impl<'a, T: 'static> Iterator<T> for SmallVecMoveIterator<'a,T> {
 }
 
 #[unsafe_destructor]
-impl<'a, T: 'static> Drop for SmallVecMoveIterator<'a,T> {
+impl<'a, T: 'a> Drop for SmallVecMoveIterator<'a,T> {
     fn drop(&mut self) {
         // Destroy the remaining elements.
         for _ in *self {}
@@ -326,13 +324,9 @@ impl<'a, T: 'static> Drop for SmallVecMoveIterator<'a,T> {
             None => {}
             Some(allocation) => {
                 unsafe {
-                    if intrinsics::owns_managed::<T>() {
-                        local_heap::local_free(allocation as *mut u8)
-                    } else {
-                        heap::deallocate(allocation as *mut u8,
-                                         mem::size_of::<T>() * self.cap,
-                                         mem::min_align_of::<T>())
-                    }
+                    heap::deallocate(allocation as *mut u8,
+                                     mem::size_of::<T>() * self.cap,
+                                     mem::min_align_of::<T>())
                 }
             }
         }
@@ -350,7 +344,7 @@ macro_rules! def_small_vector(
             data: [T, ..$size],
         }
 
-        impl<T: 'static> SmallVecPrivate<T> for $name<T> {
+        impl<T> SmallVecPrivate<T> for $name<T> {
             unsafe fn set_len(&mut self, new_len: uint) {
                 self.len = new_len
             }
@@ -376,19 +370,22 @@ macro_rules! def_small_vector(
             }
         }
 
-        impl<T: 'static> SmallVec<T> for $name<T> {
+        impl<T> SmallVec<T> for $name<T> {
             fn inline_size(&self) -> uint {
                 $size
             }
             fn len(&self) -> uint {
                 self.len
             }
+            fn is_empty(&self) -> bool {
+                self.len == 0
+            }
             fn cap(&self) -> uint {
                 self.cap
             }
         }
 
-        impl<T: 'static> VecLike<T> for $name<T> {
+        impl<T> VecLike<T> for $name<T> {
             #[inline]
             fn vec_len(&self) -> uint {
                 self.len()
@@ -405,7 +402,47 @@ macro_rules! def_small_vector(
             }
         }
 
-        impl<T: 'static> $name<T> {
+        impl<T> FromIterator<T> for $name<T> {
+            fn from_iter<I: Iterator<T>>(mut iter: I) -> $name<T> {
+                let mut v = $name::new();
+
+                let (lower_size_bound, _) = iter.size_hint();
+
+                if lower_size_bound > v.cap() {
+                    v.grow(lower_size_bound);
+                }
+
+                for elem in iter {
+                    v.push(elem);
+                }
+
+                v
+            }
+        }
+
+        impl<T> Extendable<T> for $name<T> {
+            fn extend<I: Iterator<T>>(&mut self, mut iter: I) {
+                let (lower_size_bound, _) = iter.size_hint();
+
+                let target_len = self.len() + lower_size_bound;
+
+                if target_len > self.cap() {
+                   self.grow(target_len);
+                }
+
+                for elem in iter {
+                    self.push(elem);
+                }
+            }
+        }
+
+        impl<T: fmt::Show> fmt::Show for $name<T> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{}", self.as_slice())
+            }
+        }
+
+        impl<T> $name<T> {
             #[inline]
             pub fn new() -> $name<T> {
                 unsafe {
@@ -432,7 +469,7 @@ def_small_vector!(SmallVec32, 32)
 macro_rules! def_small_vector_drop_impl(
     ($name:ident, $size:expr) => (
         #[unsafe_destructor]
-        impl<T: 'static> Drop for $name<T> {
+        impl<T> Drop for $name<T> {
             fn drop(&mut self) {
                 if !self.spilled() {
                     return
@@ -444,13 +481,9 @@ macro_rules! def_small_vector_drop_impl(
                         *ptr.offset(i as int) = mem::uninitialized();
                     }
 
-                    if intrinsics::owns_managed::<T>() {
-                        local_heap::local_free(self.ptr() as *mut u8)
-                    } else {
-                        heap::deallocate(self.mut_ptr() as *mut u8,
-                                         mem::size_of::<T>() * self.cap(),
-                                         mem::min_align_of::<T>())
-                    }
+                    heap::deallocate(self.mut_ptr() as *mut u8,
+                                     mem::size_of::<T>() * self.cap(),
+                                     mem::min_align_of::<T>())
                 }
             }
         }
@@ -467,7 +500,7 @@ def_small_vector_drop_impl!(SmallVec32, 32)
 
 macro_rules! def_small_vector_clone_impl(
     ($name:ident) => (
-        impl<T:Clone+'static> Clone for $name<T> {
+        impl<T: Clone> Clone for $name<T> {
             fn clone(&self) -> $name<T> {
                 let mut new_vector = $name::new();
                 for element in self.iter() {
@@ -527,4 +560,3 @@ pub mod tests {
         ].as_slice());
     }
 }
-

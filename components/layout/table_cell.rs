@@ -9,7 +9,7 @@
 use block::{BlockFlow, MarginsMayNotCollapse, ISizeAndMarginsComputer};
 use context::LayoutContext;
 use flow::{TableCellFlowClass, FlowClass, Flow};
-use fragment::Fragment;
+use fragment::{Fragment, FragmentBoundsIterator};
 use model::{MaybeAuto};
 use layout_debug;
 use table::InternalTable;
@@ -17,6 +17,8 @@ use wrapper::ThreadSafeLayoutNode;
 
 use servo_util::geometry::Au;
 use std::fmt;
+use style::ComputedValues;
+use sync::Arc;
 
 /// A table formatting context.
 #[deriving(Encodable)]
@@ -50,11 +52,6 @@ impl TableCellFlow {
     #[inline(always)]
     fn assign_block_size_table_cell_base<'a>(&mut self, layout_context: &'a LayoutContext<'a>) {
         self.block_flow.assign_block_size_block_base(layout_context, MarginsMayNotCollapse)
-    }
-
-    pub fn build_display_list_table_cell(&mut self, layout_context: &LayoutContext) {
-        debug!("build_display_list_table: same process as block flow");
-        self.block_flow.build_display_list_block(layout_context)
     }
 }
 
@@ -110,6 +107,7 @@ impl Flow for TableCellFlow {
         let containing_block_inline_size = self.block_flow.base.block_container_inline_size;
 
         let inline_size_computer = InternalTable;
+
         inline_size_computer.compute_used_inline_size(&mut self.block_flow,
                                                       ctx,
                                                       containing_block_inline_size);
@@ -141,6 +139,18 @@ impl Flow for TableCellFlow {
 
     fn update_late_computed_block_position_if_necessary(&mut self, block_position: Au) {
         self.block_flow.update_late_computed_block_position_if_necessary(block_position)
+    }
+
+    fn build_display_list(&mut self, layout_context: &LayoutContext) {
+        self.block_flow.build_display_list(layout_context)
+    }
+
+    fn repair_style(&mut self, new_style: &Arc<ComputedValues>) {
+        self.block_flow.repair_style(new_style)
+    }
+
+    fn iterate_through_fragment_bounds(&self, iterator: &mut FragmentBoundsIterator) {
+        self.block_flow.iterate_through_fragment_bounds(iterator);
     }
 }
 

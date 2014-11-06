@@ -8,7 +8,7 @@ use std::string;
 use std::rc::Rc;
 use std::cell::RefCell;
 use servo_util::cache::{Cache, HashCache};
-use servo_util::smallvec::{SmallVec, SmallVec1};
+use servo_util::smallvec::{SmallVec, SmallVec8};
 use style::computed_values::{font_variant, font_weight};
 use style::style_structs::Font as FontStyle;
 use sync::Arc;
@@ -28,7 +28,7 @@ use platform::font_template::FontTemplateData;
 // resources needed by the graphics layer to draw glyphs.
 
 pub trait FontHandleMethods {
-    fn new_from_template(fctx: &FontContextHandle, template: Arc<FontTemplateData>, pt_size: Option<f64>)
+    fn new_from_template(fctx: &FontContextHandle, template: Arc<FontTemplateData>, pt_size: Option<Au>)
                     -> Result<Self,()>;
     fn get_template(&self) -> Arc<FontTemplateData>;
     fn family_name(&self) -> String;
@@ -92,22 +92,27 @@ pub struct Font {
     pub metrics: FontMetrics,
     pub variant: font_variant::T,
     pub descriptor: FontTemplateDescriptor,
-    pub requested_pt_size: f64,
-    pub actual_pt_size: f64,
+    pub requested_pt_size: Au,
+    pub actual_pt_size: Au,
     pub shaper: Option<Shaper>,
     pub shape_cache: HashCache<String, Arc<GlyphStore>>,
     pub glyph_advance_cache: HashCache<u32, FractionalPixel>,
 }
 
 impl Font {
-    pub fn shape_text(&mut self, text: String, is_whitespace: bool) -> Arc<GlyphStore> {
+    pub fn shape_text(&mut self, text: &str, is_whitespace: bool) -> Arc<GlyphStore> {
         self.make_shaper();
         let shaper = &self.shaper;
-        self.shape_cache.find_or_create(&text, |txt| {
-            let mut glyphs = GlyphStore::new(text.as_slice().char_len() as int, is_whitespace);
-            shaper.as_ref().unwrap().shape_text(txt.as_slice(), &mut glyphs);
-            Arc::new(glyphs)
-        })
+        match self.shape_cache.find_equiv(&text) {
+            None => {}
+            Some(glyphs) => return (*glyphs).clone(),
+        }
+
+        let mut glyphs = GlyphStore::new(text.char_len() as int, is_whitespace);
+        shaper.as_ref().unwrap().shape_text(text, &mut glyphs);
+        let glyphs = Arc::new(glyphs);
+        self.shape_cache.insert(text.to_string(), glyphs.clone());
+        glyphs
     }
 
     fn make_shaper<'a>(&'a mut self) -> &'a Shaper {
@@ -160,11 +165,11 @@ impl Font {
 }
 
 pub struct FontGroup {
-    pub fonts: SmallVec1<Rc<RefCell<Font>>>,
+    pub fonts: SmallVec8<Rc<RefCell<Font>>>,
 }
 
 impl FontGroup {
-    pub fn new(fonts: SmallVec1<Rc<RefCell<Font>>>) -> FontGroup {
+    pub fn new(fonts: SmallVec8<Rc<RefCell<Font>>>) -> FontGroup {
         FontGroup {
             fonts: fonts,
         }

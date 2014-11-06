@@ -19,9 +19,10 @@ use dom::bindings::js::{OptionalSettable, OptionalRootable, Root};
 use dom::bindings::utils::{Reflectable, Reflector};
 use dom::bindings::error::{ErrorResult, Fallible, NamespaceError, InvalidCharacter, Syntax};
 use dom::bindings::utils::{QName, Name, InvalidXMLName, xml_name_type};
+use dom::create::create_element;
 use dom::domrect::DOMRect;
 use dom::domrectlist::DOMRectList;
-use dom::document::{Document, DocumentHelpers};
+use dom::document::{Document, DocumentHelpers, LayoutDocumentHelpers};
 use dom::domtokenlist::DOMTokenList;
 use dom::eventtarget::{EventTarget, NodeTargetTypeId};
 use dom::htmlcollection::HTMLCollection;
@@ -73,7 +74,7 @@ impl Reflectable for Element {
     }
 }
 
-#[deriving(PartialEq)]
+#[deriving(PartialEq, Show)]
 #[jstraceable]
 pub enum ElementTypeId {
     HTMLElementTypeId,
@@ -147,11 +148,22 @@ pub enum ElementTypeId {
     ElementTypeId_,
 }
 
+#[deriving(PartialEq)]
+pub enum ElementCreator {
+    ParserCreated,
+    ScriptCreated,
+}
+
 //
 // Element methods
 //
-
 impl Element {
+    pub fn create(name: QualName, prefix: Option<DOMString>,
+                  document: JSRef<Document>, creator: ElementCreator)
+                  -> Temporary<Element> {
+        create_element(name, prefix, document, creator)
+    }
+
     pub fn new_inherited(type_id: ElementTypeId, local_name: DOMString, namespace: Namespace, prefix: Option<DOMString>, document: JSRef<Document>) -> Element {
         Element {
             node: Node::new_inherited(ElementNodeTypeId(type_id), document),
@@ -335,8 +347,7 @@ impl LayoutElementHelpers for JS<Element> {
             return false
         }
         let node: JS<Node> = self.transmute_copy();
-        let owner_doc = node.owner_doc_for_layout().unsafe_get();
-        (*owner_doc).is_html_document()
+        node.owner_doc_for_layout().is_html_document_for_layout()
     }
 }
 
@@ -408,9 +419,8 @@ pub trait AttributeHandlers {
                        value: DOMString) -> AttrValue;
 
     fn remove_attribute(self, namespace: Namespace, name: &str);
-    fn notify_attribute_changed(self, local_name: &Atom);
+    fn notify_content_changed(self);
     fn has_class(&self, name: &Atom) -> bool;
-    fn notify_attribute_removed(self);
 
     fn set_atomic_attribute(self, name: &Atom, value: DOMString);
 
@@ -499,7 +509,7 @@ impl<'a> AttributeHandlers for JSRef<'a, Element> {
                        value: DOMString) -> AttrValue {
         if *namespace == ns!("") {
             vtable_for(&NodeCast::from_ref(self))
-                .parse_plain_attribute(local_name.as_slice(), value)
+                .parse_plain_attribute(local_name, value)
         } else {
             StringAttrValue(value)
         }
@@ -516,36 +526,24 @@ impl<'a> AttributeHandlers for JSRef<'a, Element> {
         match idx {
             None => (),
             Some(idx) => {
-                {
-                    let node: JSRef<Node> = NodeCast::from_ref(self);
-                    node.wait_until_safe_to_modify_dom();
-                }
+                let node: JSRef<Node> = NodeCast::from_ref(self);
+                node.wait_until_safe_to_modify_dom();
 
                 if namespace == ns!("") {
-                    let removed_raw_value = (*self.attrs.borrow())[idx].root().Value();
-                    vtable_for(&NodeCast::from_ref(self))
-                        .before_remove_attr(&local_name,
-                                            removed_raw_value);
+                    let attr = (*self.attrs.borrow())[idx].root();
+                    vtable_for(&NodeCast::from_ref(self)).before_remove_attr(*attr);
                 }
 
                 self.attrs.borrow_mut().remove(idx);
-                self.notify_attribute_removed();
+                self.notify_content_changed();
             }
         };
     }
 
-    fn notify_attribute_changed(self, _local_name: &Atom) {
+    fn notify_content_changed(self) {
         let node: JSRef<Node> = NodeCast::from_ref(self);
         if node.is_in_doc() {
-            let document = node.owner_doc().root();
-            document.content_changed(node);
-        }
-    }
-
-    fn notify_attribute_removed(self) {
-        let node: JSRef<Node> = NodeCast::from_ref(self);
-        if node.is_in_doc() {
-            let document = node.owner_doc().root();
+            let document = document_from_node(self).root();
             document.content_changed(node);
         }
     }
@@ -659,7 +657,11 @@ impl<'a> ElementMethods for JSRef<'a, Element> {
     // http://dom.spec.whatwg.org/#dom-element-tagname
     fn TagName(self) -> DOMString {
         let qualified_name = match self.prefix {
-            Some(ref prefix) => format!("{}:{}", prefix, self.local_name).into_maybe_owned(),
+            Some(ref prefix) => {
+                (format!("{:s}:{:s}",
+                         prefix.as_slice(),
+                         self.local_name.as_slice())).into_maybe_owned()
+            },
             None => self.local_name.as_slice().into_maybe_owned()
         };
         if self.html_element_in_html_document() {
@@ -852,16 +854,7 @@ impl<'a> ElementMethods for JSRef<'a, Element> {
 
     // http://dom.spec.whatwg.org/#dom-element-hasattribute
     fn HasAttribute(self, name: DOMString) -> bool {
-        // Step 1.
-        if self.html_element_in_html_document() {
-            // TODO(pcwalton): Small string optimization here.
-            return self.has_attribute(&Atom::from_slice(name.as_slice()
-                                                            .to_ascii_lower()
-                                                            .as_slice()))
-        }
-
-        // Step 2.
-        self.has_attribute(&Atom::from_slice(name.as_slice()))
+        self.GetAttribute(name).is_some()
     }
 
     // http://dom.spec.whatwg.org/#dom-element-hasattributens
@@ -981,22 +974,24 @@ impl<'a> VirtualMethods for JSRef<'a, Element> {
         Some(node as &VirtualMethods)
     }
 
-    fn after_set_attr(&self, name: &Atom, value: DOMString) {
+    fn after_set_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.after_set_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.after_set_attr(attr),
+            _ => ()
         }
 
-        match name.as_slice() {
-            "style" => {
+        match attr.local_name() {
+            &atom!("style") => {
                 let doc = document_from_node(*self).root();
                 let base_url = doc.url().clone();
+                let value = attr.value();
                 let style = Some(style::parse_style_attribute(value.as_slice(), &base_url));
                 *self.style_attribute.borrow_mut() = style;
             }
-            "id" => {
+            &atom!("id") => {
                 let node: JSRef<Node> = NodeCast::from_ref(*self);
-                if node.is_in_doc() && !value.is_empty() {
+                let value = attr.value();
+                if node.is_in_doc() && !value.as_slice().is_empty() {
                     let doc = document_from_node(*self).root();
                     let value = Atom::from_slice(value.as_slice());
                     doc.register_named_element(*self, value);
@@ -1005,22 +1000,23 @@ impl<'a> VirtualMethods for JSRef<'a, Element> {
             _ => ()
         }
 
-        self.notify_attribute_changed(name);
+        self.notify_content_changed();
     }
 
-    fn before_remove_attr(&self, name: &Atom, value: DOMString) {
+    fn before_remove_attr(&self, attr: JSRef<Attr>) {
         match self.super_type() {
-            Some(ref s) => s.before_remove_attr(name, value.clone()),
-            _ => (),
+            Some(ref s) => s.before_remove_attr(attr),
+            _ => ()
         }
 
-        match name.as_slice() {
-            "style" => {
+        match attr.local_name() {
+            &atom!("style") => {
                 *self.style_attribute.borrow_mut() = None;
             }
-            "id" => {
+            &atom!("id") => {
                 let node: JSRef<Node> = NodeCast::from_ref(*self);
-                if node.is_in_doc() && !value.is_empty() {
+                let value = attr.value();
+                if node.is_in_doc() && !value.as_slice().is_empty() {
                     let doc = document_from_node(*self).root();
                     let value = Atom::from_slice(value.as_slice());
                     doc.unregister_named_element(*self, value);
@@ -1029,13 +1025,13 @@ impl<'a> VirtualMethods for JSRef<'a, Element> {
             _ => ()
         }
 
-        self.notify_attribute_changed(name);
+        self.notify_content_changed();
     }
 
-    fn parse_plain_attribute(&self, name: &str, value: DOMString) -> AttrValue {
+    fn parse_plain_attribute(&self, name: &Atom, value: DOMString) -> AttrValue {
         match name {
-            "id" => AttrValue::from_atomic(value),
-            "class" => AttrValue::from_tokenlist(value),
+            &atom!("id") => AttrValue::from_atomic(value),
+            &atom!("class") => AttrValue::from_tokenlist(value),
             _ => self.super_type().unwrap().parse_plain_attribute(name, value),
         }
     }
@@ -1172,4 +1168,3 @@ impl<'a> style::TElement<'a> for JSRef<'a, Element> {
         }
     }
 }
-

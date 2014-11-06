@@ -32,12 +32,15 @@
 
 use context::SharedLayoutContext;
 use css::node_style::StyledNode;
-use util::{LayoutDataAccess, LayoutDataWrapper, PrivateLayoutData, OpaqueNodeMethods};
+use incremental::RestyleDamage;
+use util::{LayoutDataAccess, LayoutDataFlags, LayoutDataWrapper, OpaqueNodeMethods};
+use util::{PrivateLayoutData};
 
 use gfx::display_list::OpaqueNode;
 use script::dom::bindings::cell::{Ref, RefMut};
-use script::dom::bindings::codegen::InheritTypes::{ElementCast, HTMLIFrameElementCast, HTMLImageElementCast};
-use script::dom::bindings::codegen::InheritTypes::{HTMLInputElementCast, TextCast};
+use script::dom::bindings::codegen::InheritTypes::{ElementCast, HTMLIFrameElementCast};
+use script::dom::bindings::codegen::InheritTypes::{HTMLImageElementCast, HTMLInputElementCast};
+use script::dom::bindings::codegen::InheritTypes::{TextCast};
 use script::dom::bindings::js::JS;
 use script::dom::element::{Element, HTMLAreaElementTypeId, HTMLAnchorElementTypeId};
 use script::dom::element::{HTMLLinkElementTypeId, LayoutElementHelpers, RawLayoutElementHelpers};
@@ -125,11 +128,6 @@ pub trait TLayoutNode {
 
     /// Returns the first child of this node.
     fn first_child(&self) -> Option<Self>;
-
-    /// Dumps this node tree, for debugging.
-    fn dump(&self) {
-        // TODO(pcwalton): Reimplement this in a way that's safe for layout to call.
-    }
 }
 
 /// A wrapper so that layout can access only the methods that it should have access to. Layout must
@@ -205,6 +203,28 @@ impl<'ln> LayoutNode<'ln> {
         })
     }
 
+    pub fn dump(self) {
+        self.dump_indent(0);
+    }
+
+    fn dump_indent(self, indent: uint) {
+        let mut s = String::new();
+        for _ in range(0, indent) {
+            s.push_str("  ");
+        }
+
+        s.push_str(self.debug_str().as_slice());
+        println!("{:s}", s);
+
+        for kid in self.children() {
+            kid.dump_indent(indent + 1);
+        }
+    }
+
+    fn debug_str(self) -> String {
+        format!("{}: dirty={}", self.type_id(), self.is_dirty())
+    }
+
     pub fn flow_debug_id(self) -> uint {
         let layout_data_ref = self.borrow_layout_data();
         match *layout_data_ref {
@@ -213,26 +233,34 @@ impl<'ln> LayoutNode<'ln> {
         }
     }
 
-    /// Iterates over this node and all its descendants, in preorder.
-    ///
-    /// FIXME(pcwalton): Terribly inefficient. We should use parallelism.
     pub fn traverse_preorder(self) -> LayoutTreeIterator<'ln> {
-        let mut nodes = vec!();
-        gather_layout_nodes(self, &mut nodes, false);
-        LayoutTreeIterator::new(nodes)
+        LayoutTreeIterator::new(self)
+    }
+
+    fn last_child(self) -> Option<LayoutNode<'ln>> {
+        unsafe {
+            self.get_jsmanaged().last_child_ref().map(|node| self.new_with_this_lifetime(&node))
+        }
     }
 
     /// Returns an iterator over this node's children.
     pub fn children(self) -> LayoutNodeChildrenIterator<'ln> {
         // FIXME(zwarich): Remove this when UFCS lands and there is a better way
         // of disambiguating methods.
-        fn first_child<T: TLayoutNode>(this: &T) -> Option<T> {
+        fn first_child<T: TLayoutNode>(this: T) -> Option<T> {
             this.first_child()
         }
 
         LayoutNodeChildrenIterator {
-            current_node: first_child(&self),
+            current: first_child(self),
         }
+    }
+
+    pub fn rev_children(self) -> LayoutNodeReverseChildrenIterator<'ln> {
+        LayoutNodeReverseChildrenIterator {
+            current: self.last_child()
+        }
+
     }
 
     pub unsafe fn get_jsmanaged<'a>(&'a self) -> &'a JS<Node> {
@@ -287,6 +315,12 @@ impl<'ln> TNode<'ln, LayoutElement<'ln>> for LayoutNode<'ln> {
     fn first_child(self) -> Option<LayoutNode<'ln>> {
         unsafe {
             self.node.first_child_ref().map(|node| self.new_with_this_lifetime(&node))
+        }
+    }
+
+    fn last_child(self) -> Option<LayoutNode<'ln>> {
+        unsafe {
+            self.node.last_child_ref().map(|node| self.new_with_this_lifetime(&node))
         }
     }
 
@@ -389,59 +423,48 @@ impl<'ln> TNode<'ln, LayoutElement<'ln>> for LayoutNode<'ln> {
 }
 
 pub struct LayoutNodeChildrenIterator<'a> {
-    current_node: Option<LayoutNode<'a>>,
+    current: Option<LayoutNode<'a>>,
 }
 
 impl<'a> Iterator<LayoutNode<'a>> for LayoutNodeChildrenIterator<'a> {
     fn next(&mut self) -> Option<LayoutNode<'a>> {
-        let node = self.current_node.clone();
-        self.current_node = node.clone().and_then(|node| {
-            node.next_sibling()
-        });
+        let node = self.current;
+        self.current = node.and_then(|node| node.next_sibling());
         node
     }
 }
 
-// FIXME: Do this without precomputing a vector of refs.
-// Easy for preorder; harder for postorder.
-//
-// FIXME(pcwalton): Parallelism! Eventually this should just be nuked.
+pub struct LayoutNodeReverseChildrenIterator<'a> {
+    current: Option<LayoutNode<'a>>,
+}
+
+impl<'a> Iterator<LayoutNode<'a>> for LayoutNodeReverseChildrenIterator<'a> {
+    fn next(&mut self) -> Option<LayoutNode<'a>> {
+        let node = self.current;
+        self.current = node.and_then(|node| node.prev_sibling());
+        node
+    }
+}
+
 pub struct LayoutTreeIterator<'a> {
-    nodes: Vec<LayoutNode<'a>>,
-    index: uint,
+    stack: Vec<LayoutNode<'a>>,
 }
 
 impl<'a> LayoutTreeIterator<'a> {
-    fn new(nodes: Vec<LayoutNode<'a>>) -> LayoutTreeIterator<'a> {
+    fn new(root: LayoutNode<'a>) -> LayoutTreeIterator<'a> {
+        let mut stack = vec!();
+        stack.push(root);
         LayoutTreeIterator {
-            nodes: nodes,
-            index: 0,
+            stack: stack
         }
     }
 }
 
 impl<'a> Iterator<LayoutNode<'a>> for LayoutTreeIterator<'a> {
     fn next(&mut self) -> Option<LayoutNode<'a>> {
-        if self.index >= self.nodes.len() {
-            None
-        } else {
-            let v = self.nodes[self.index].clone();
-            self.index += 1;
-            Some(v)
-        }
-    }
-}
-
-/// FIXME(pcwalton): This is super inefficient.
-fn gather_layout_nodes<'a>(cur: LayoutNode<'a>, refs: &mut Vec<LayoutNode<'a>>, postorder: bool) {
-    if !postorder {
-        refs.push(cur.clone());
-    }
-    for kid in cur.children() {
-        gather_layout_nodes(kid, refs, postorder)
-    }
-    if postorder {
-        refs.push(cur.clone());
+        let ret = self.stack.pop();
+        ret.map(|node| self.stack.extend(node.rev_children()));
+        ret
     }
 }
 
@@ -498,6 +521,7 @@ impl<'le> TElement<'le> for LayoutElement<'le> {
         }
     }
 
+    #[inline]
     fn get_hover_state(self) -> bool {
         unsafe {
             self.element.node().get_hover_state_for_layout()
@@ -511,18 +535,21 @@ impl<'le> TElement<'le> for LayoutElement<'le> {
         }
     }
 
+    #[inline]
     fn get_disabled_state(self) -> bool {
         unsafe {
             self.element.node().get_disabled_state_for_layout()
         }
     }
 
+    #[inline]
     fn get_enabled_state(self) -> bool {
         unsafe {
             self.element.node().get_enabled_state_for_layout()
         }
     }
 
+    #[inline]
     fn has_class(self, name: &Atom) -> bool {
         unsafe {
             self.element.has_class_for_layout(name)
@@ -735,10 +762,12 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
         }
     }
 
+    #[inline]
     pub fn get_pseudo_element_type(&self) -> PseudoElementType {
         self.pseudo
     }
 
+    #[inline]
     pub fn get_normal_display(&self) -> display::T {
         let mut layout_data_ref = self.mutate_layout_data();
         let node_layout_data_wrapper = layout_data_ref.as_mut().unwrap();
@@ -746,6 +775,7 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
         style.get_box().display
     }
 
+    #[inline]
     pub fn get_before_display(&self) -> display::T {
         let mut layout_data_ref = self.mutate_layout_data();
         let node_layout_data_wrapper = layout_data_ref.as_mut().unwrap();
@@ -753,6 +783,7 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
         style.get_box().display
     }
 
+    #[inline]
     pub fn get_after_display(&self) -> display::T {
         let mut layout_data_ref = self.mutate_layout_data();
         let node_layout_data_wrapper = layout_data_ref.as_mut().unwrap();
@@ -760,19 +791,31 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
         style.get_box().display
     }
 
+    #[inline]
     pub fn has_before_pseudo(&self) -> bool {
         let layout_data_wrapper = self.borrow_layout_data();
         let layout_data_wrapper_ref = layout_data_wrapper.as_ref().unwrap();
         layout_data_wrapper_ref.data.before_style.is_some()
     }
 
+    #[inline]
     pub fn has_after_pseudo(&self) -> bool {
         let layout_data_wrapper = self.borrow_layout_data();
         let layout_data_wrapper_ref = layout_data_wrapper.as_ref().unwrap();
         layout_data_wrapper_ref.data.after_style.is_some()
     }
 
+    /// Borrows the layout data without checking. Fails on a conflicting borrow.
+    #[inline(always)]
+    fn borrow_layout_data_unchecked<'a>(&'a self) -> *const Option<LayoutDataWrapper> {
+        unsafe {
+            mem::transmute(self.get().layout_data_unchecked())
+        }
+    }
+
     /// Borrows the layout data immutably. Fails on a conflicting borrow.
+    ///
+    /// TODO(pcwalton): Make this private. It will let us avoid borrow flag checks in some cases.
     #[inline(always)]
     pub fn borrow_layout_data<'a>(&'a self) -> Ref<'a,Option<LayoutDataWrapper>> {
         unsafe {
@@ -781,6 +824,8 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
     }
 
     /// Borrows the layout data mutably. Fails on a conflicting borrow.
+    ///
+    /// TODO(pcwalton): Make this private. It will let us avoid borrow flag checks in some cases.
     #[inline(always)]
     pub fn mutate_layout_data<'a>(&'a self) -> RefMut<'a,Option<LayoutDataWrapper>> {
         unsafe {
@@ -854,6 +899,50 @@ impl<'ln> ThreadSafeLayoutNode<'ln> {
                 Some(input) => input.get_size_for_layout(),
                 None => fail!("not an input element!")
             }
+        }
+    }
+
+    /// Get the description of how to account for recent style changes.
+    /// This is a simple bitfield and fine to copy by value.
+    pub fn restyle_damage(self) -> RestyleDamage {
+        let layout_data_ref = self.borrow_layout_data();
+        layout_data_ref.as_ref().unwrap().data.restyle_damage
+    }
+
+    /// Set the restyle damage field.
+    pub fn set_restyle_damage(self, damage: RestyleDamage) {
+        let mut layout_data_ref = self.mutate_layout_data();
+        match &mut *layout_data_ref {
+            &Some(ref mut layout_data) => layout_data.data.restyle_damage = damage,
+            _ => fail!("no layout data for this node"),
+        }
+    }
+
+    /// Returns the layout data flags for this node.
+    pub fn flags(self) -> LayoutDataFlags {
+        unsafe {
+            match *self.borrow_layout_data_unchecked() {
+                None => fail!(),
+                Some(ref layout_data) => layout_data.data.flags,
+            }
+        }
+    }
+
+    /// Adds the given flags to this node.
+    pub fn insert_flags(self, new_flags: LayoutDataFlags) {
+        let mut layout_data_ref = self.mutate_layout_data();
+        match &mut *layout_data_ref {
+            &Some(ref mut layout_data) => layout_data.data.flags.insert(new_flags),
+            _ => fail!("no layout data for this node"),
+        }
+    }
+
+    /// Removes the given flags from this node.
+    pub fn remove_flags(self, flags: LayoutDataFlags) {
+        let mut layout_data_ref = self.mutate_layout_data();
+        match &mut *layout_data_ref {
+            &Some(ref mut layout_data) => layout_data.data.flags.remove(flags),
+            _ => fail!("no layout data for this node"),
         }
     }
 }

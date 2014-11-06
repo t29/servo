@@ -19,24 +19,19 @@ use render_context::RenderContext;
 use text::glyph::CharIndex;
 use text::TextRun;
 
-use collections::dlist::DList;
-use collections::dlist;
+use azure::azure::AzFloat;
+use collections::Deque;
+use collections::dlist::{mod, DList};
 use geom::{Point2D, Rect, SideOffsets2D, Size2D, Matrix2D};
 use libc::uintptr_t;
 use servo_net::image::base::Image;
+use servo_util::dlist as servo_dlist;
 use servo_util::geometry::Au;
 use servo_util::range::Range;
 use std::fmt;
-use std::mem;
 use std::slice::Items;
 use style::computed_values::border_style;
 use sync::Arc;
-use std::num::Zero;
-use std::ptr;
-
-use azure::AzFloat;
-use azure::scaled_font::ScaledFont;
-use azure::azure_hl::ColorPattern;
 
 pub mod optimizer;
 
@@ -57,90 +52,8 @@ impl OpaqueNode {
     }
 }
 
-trait ScaledFontExtensionMethods {
-    fn draw_text_into_context(&self,
-                              rctx: &RenderContext,
-                              run: &Box<TextRun>,
-                              range: &Range<CharIndex>,
-                              baseline_origin: Point2D<Au>,
-                              color: Color,
-                              antialias: bool);
-}
-
-impl ScaledFontExtensionMethods for ScaledFont {
-    fn draw_text_into_context(&self,
-                              rctx: &RenderContext,
-                              run: &Box<TextRun>,
-                              range: &Range<CharIndex>,
-                              baseline_origin: Point2D<Au>,
-                              color: Color,
-                              antialias: bool) {
-        use libc::types::common::c99::uint32_t;
-        use azure::{struct__AzDrawOptions,
-                    struct__AzGlyph,
-                    struct__AzGlyphBuffer,
-                    struct__AzPoint};
-        use azure::azure::{AzDrawTargetFillGlyphs};
-
-        let target = rctx.get_draw_target();
-        let pattern = ColorPattern::new(color);
-        let azure_pattern = pattern.azure_color_pattern;
-        assert!(azure_pattern.is_not_null());
-
-        let fields = if antialias {
-            0x0200
-        } else {
-            0
-        };
-
-        let mut options = struct__AzDrawOptions {
-            mAlpha: 1f64 as AzFloat,
-            fields: fields,
-        };
-
-        let mut origin = baseline_origin.clone();
-        let mut azglyphs = vec!();
-        azglyphs.reserve(range.length().to_uint());
-
-        for (glyphs, _offset, slice_range) in run.iter_slices_for_range(range) {
-            for (_i, glyph) in glyphs.iter_glyphs_for_char_range(&slice_range) {
-                let glyph_advance = glyph.advance();
-                let glyph_offset = glyph.offset().unwrap_or(Zero::zero());
-
-                let azglyph = struct__AzGlyph {
-                    mIndex: glyph.id() as uint32_t,
-                    mPosition: struct__AzPoint {
-                        x: (origin.x + glyph_offset.x).to_subpx() as AzFloat,
-                        y: (origin.y + glyph_offset.y).to_subpx() as AzFloat
-                    }
-                };
-                origin = Point2D(origin.x + glyph_advance, origin.y);
-                azglyphs.push(azglyph)
-            };
-        }
-
-        let azglyph_buf_len = azglyphs.len();
-        if azglyph_buf_len == 0 { return; } // Otherwise the Quartz backend will assert.
-
-        let mut glyphbuf = struct__AzGlyphBuffer {
-            mGlyphs: azglyphs.as_mut_ptr(),
-            mNumGlyphs: azglyph_buf_len as uint32_t
-        };
-
-        unsafe {
-            // TODO(Issue #64): this call needs to move into azure_hl.rs
-            AzDrawTargetFillGlyphs(target.azure_draw_target,
-                                   self.get_ref(),
-                                   &mut glyphbuf,
-                                   azure_pattern,
-                                   &mut options,
-                                   ptr::null_mut());
-        }
-    }
-}
-
 /// "Steps" as defined by CSS 2.1 § E.2.
-#[deriving(Clone, PartialEq)]
+#[deriving(Clone, PartialEq, Show)]
 pub enum StackingLevel {
     /// The border and backgrounds for the root of this stacking context: steps 1 and 2.
     BackgroundAndBordersStackingLevel,
@@ -158,6 +71,7 @@ pub enum StackingLevel {
 }
 
 impl StackingLevel {
+    #[inline]
     pub fn from_background_and_border_level(level: BackgroundAndBorderLevel) -> StackingLevel {
         match level {
             RootOfStackingContextLevel => BackgroundAndBordersStackingLevel,
@@ -181,49 +95,45 @@ struct StackingContext {
 }
 
 impl StackingContext {
-    /// Creates a stacking context from a display list.
-    fn new(list: DisplayList) -> StackingContext {
-        let DisplayList {
-            list: list
-        } = list;
-
-        let mut stacking_context = StackingContext {
+    /// Creates a new empty stacking context.
+    #[inline]
+    fn new() -> StackingContext {
+        StackingContext {
             background_and_borders: DisplayList::new(),
             block_backgrounds_and_borders: DisplayList::new(),
             floats: DisplayList::new(),
             content: DisplayList::new(),
             positioned_descendants: Vec::new(),
-        };
+        }
+    }
 
-        for item in list.into_iter() {
-            match item.base().level {
+    /// Initializes a stacking context from a display list, consuming that display list in the
+    /// process.
+    fn init_from_list(&mut self, list: &mut DisplayList) {
+        while !list.list.is_empty() {
+            let mut head = DisplayList::from_list(servo_dlist::split(&mut list.list));
+            match head.front().unwrap().base().level {
                 BackgroundAndBordersStackingLevel => {
-                    stacking_context.background_and_borders.push(item)
+                    self.background_and_borders.append_from(&mut head)
                 }
                 BlockBackgroundsAndBordersStackingLevel => {
-                    stacking_context.block_backgrounds_and_borders.push(item)
+                    self.block_backgrounds_and_borders.append_from(&mut head)
                 }
-                FloatStackingLevel => stacking_context.floats.push(item),
-                ContentStackingLevel => stacking_context.content.push(item),
+                FloatStackingLevel => self.floats.append_from(&mut head),
+                ContentStackingLevel => self.content.append_from(&mut head),
                 PositionedDescendantStackingLevel(z_index) => {
-                    match stacking_context.positioned_descendants
-                                          .iter_mut()
-                                          .find(|& &(z, _)| z_index == z) {
+                    match self.positioned_descendants.iter_mut().find(|& &(z, _)| z_index == z) {
                         Some(&(_, ref mut my_list)) => {
-                            my_list.push(item);
+                            my_list.append_from(&mut head);
                             continue
                         }
                         None => {}
                     }
 
-                    let mut new_list = DisplayList::new();
-                    new_list.list.push(item);
-                    stacking_context.positioned_descendants.push((z_index, new_list))
+                    self.positioned_descendants.push((z_index, head))
                 }
             }
         }
-
-        stacking_context
     }
 }
 
@@ -257,28 +167,41 @@ impl<'a> Iterator<&'a DisplayList> for DisplayListIterator<'a> {
 
 impl DisplayList {
     /// Creates a new display list.
+    #[inline]
     pub fn new() -> DisplayList {
         DisplayList {
             list: DList::new(),
         }
     }
 
-    /// Appends the given item to the display list.
-    pub fn push(&mut self, item: DisplayItem) {
-        self.list.push(item)
+    /// Creates a new display list from the given list of display items.
+    fn from_list(list: DList<DisplayItem>) -> DisplayList {
+        DisplayList {
+            list: list,
+        }
     }
 
-    /// Appends the given display list to this display list, consuming the other display list in
-    /// the process.
-    pub fn push_all_move(&mut self, other: DisplayList) {
-        self.list.append(other.list)
+    /// Appends the given item to the display list.
+    #[inline]
+    pub fn push(&mut self, item: DisplayItem) {
+        self.list.push(item);
+    }
+
+    /// Appends the items in the given display list to this one, removing them in the process.
+    #[inline]
+    pub fn append_from(&mut self, other: &mut DisplayList) {
+        servo_dlist::append_from(&mut self.list, &mut other.list)
+    }
+
+    /// Returns the first display item in this list.
+    #[inline]
+    fn front(&self) -> Option<&DisplayItem> {
+        self.list.front()
     }
 
     pub fn debug(&self) {
-        if log_enabled!(::log::DEBUG) {
-            for item in self.list.iter() {
-                item.debug_with_level(0);
-            }
+        for item in self.list.iter() {
+            item.debug_with_level(0);
         }
     }
 
@@ -287,15 +210,16 @@ impl DisplayList {
     pub fn draw_into_context(&self,
                              render_context: &mut RenderContext,
                              current_transform: &Matrix2D<AzFloat>,
-                             current_clip_rect: &Rect<Au>) {
+                             current_clip_stack: &mut Vec<Rect<Au>>) {
         debug!("Beginning display list.");
         for item in self.list.iter() {
-            item.draw_into_context(render_context, current_transform, current_clip_rect)
+            item.draw_into_context(render_context, current_transform, current_clip_stack)
         }
         debug!("Ending display list.");
     }
 
     /// Returns a preorder iterator over the given display list.
+    #[inline]
     pub fn iter<'a>(&'a self) -> DisplayItemIterator<'a> {
         ParentDisplayItemIterator(self.list.iter())
     }
@@ -304,55 +228,56 @@ impl DisplayList {
     /// steps in CSS 2.1 § E.2.
     ///
     /// This must be called before `draw_into_context()` is for correct results.
-    pub fn flatten(self, resulting_level: StackingLevel) -> DisplayList {
-        // TODO(pcwalton): Sort positioned children according to z-index.
+    pub fn flatten(&mut self, resulting_level: StackingLevel) {
+        // Fast paths:
+        if self.list.len() == 0 {
+            return
+        }
+        if self.list.len() == 1 {
+            self.set_stacking_level(resulting_level);
+            return
+        }
 
-        let mut result = DisplayList::new();
-        let StackingContext {
-            background_and_borders,
-            block_backgrounds_and_borders,
-            floats,
-            content,
-            positioned_descendants: mut positioned_descendants
-        } = StackingContext::new(self);
+        let mut stacking_context = StackingContext::new();
+        stacking_context.init_from_list(self);
+        debug_assert!(self.list.is_empty());
 
         // Steps 1 and 2: Borders and background for the root.
-        result.push_all_move(background_and_borders);
+        self.append_from(&mut stacking_context.background_and_borders);
 
         // Sort positioned children according to z-index.
-        positioned_descendants.sort_by(|&(z_index_a, _), &(z_index_b, _)| {
+        stacking_context.positioned_descendants.sort_by(|&(z_index_a, _), &(z_index_b, _)| {
             z_index_a.cmp(&z_index_b)
         });
 
         // Step 3: Positioned descendants with negative z-indices.
-        for &(ref mut z_index, ref mut list) in positioned_descendants.iter_mut() {
+        for &(ref mut z_index, ref mut list) in stacking_context.positioned_descendants.iter_mut() {
             if *z_index < 0 {
-                result.push_all_move(mem::replace(list, DisplayList::new()))
+                self.append_from(list)
             }
         }
 
         // Step 4: Block backgrounds and borders.
-        result.push_all_move(block_backgrounds_and_borders);
+        self.append_from(&mut stacking_context.block_backgrounds_and_borders);
 
         // Step 5: Floats.
-        result.push_all_move(floats);
+        self.append_from(&mut stacking_context.floats);
 
         // TODO(pcwalton): Step 6: Inlines that generate stacking contexts.
 
         // Step 7: Content.
-        result.push_all_move(content);
+        self.append_from(&mut stacking_context.content);
 
         // Steps 8 and 9: Positioned descendants with nonnegative z-indices.
-        for &(ref mut z_index, ref mut list) in positioned_descendants.iter_mut() {
+        for &(ref mut z_index, ref mut list) in stacking_context.positioned_descendants.iter_mut() {
             if *z_index >= 0 {
-                result.push_all_move(mem::replace(list, DisplayList::new()))
+                self.append_from(list)
             }
         }
 
         // TODO(pcwalton): Step 10: Outlines.
 
-        result.set_stacking_level(resulting_level);
-        result
+        self.set_stacking_level(resulting_level);
     }
 
     /// Sets the stacking level for this display list and all its subitems.
@@ -400,6 +325,7 @@ pub struct BaseDisplayItem {
 }
 
 impl BaseDisplayItem {
+    #[inline(always)]
     pub fn new(bounds: Rect<Au>, node: OpaqueNode, level: StackingLevel, clip_rect: Rect<Au>)
                -> BaseDisplayItem {
         BaseDisplayItem {
@@ -503,14 +429,19 @@ impl DisplayItem {
     fn draw_into_context(&self,
                          render_context: &mut RenderContext,
                          current_transform: &Matrix2D<AzFloat>,
-                         current_clip_rect: &Rect<Au>) {
+                         current_clip_stack: &mut Vec<Rect<Au>>) {
         // This should have been flattened to the content stacking level first.
         assert!(self.base().level == ContentStackingLevel);
 
+        // TODO(pcwalton): This will need some tweaking to deal with more complex clipping regions.
         let clip_rect = &self.base().clip_rect;
-        let need_to_clip = current_clip_rect != clip_rect;
-        if need_to_clip {
+        if current_clip_stack.len() == 0 || current_clip_stack.last().unwrap() != clip_rect {
+            while current_clip_stack.len() != 0 {
+                render_context.draw_pop_clip();
+                drop(current_clip_stack.pop());
+            }
             render_context.draw_push_clip(clip_rect);
+            current_clip_stack.push(*clip_rect);
         }
 
         match *self {
@@ -520,56 +451,7 @@ impl DisplayItem {
 
             TextDisplayItemClass(ref text) => {
                 debug!("Drawing text at {}.", text.base.bounds);
-
-                // Optimization: Don’t set a transform matrix for upright text,
-                // and pass a strart point to `draw_text_into_context`.
-                // For sideways text, it’s easier to do the rotation such that its center
-                // (the baseline’s start point) is at (0, 0) coordinates.
-                let baseline_origin = match text.orientation {
-                    Upright => text.baseline_origin,
-                    SidewaysLeft => {
-                        let x = text.baseline_origin.x.to_nearest_px() as AzFloat;
-                        let y = text.baseline_origin.y.to_nearest_px() as AzFloat;
-                        render_context.draw_target.set_transform(&current_transform.mul(
-                            &Matrix2D::new(
-                                0., -1.,
-                                1., 0.,
-                                x, y
-                            )
-                        ));
-                        Zero::zero()
-                    },
-                    SidewaysRight => {
-                        let x = text.baseline_origin.x.to_nearest_px() as AzFloat;
-                        let y = text.baseline_origin.y.to_nearest_px() as AzFloat;
-                        render_context.draw_target.set_transform(&current_transform.mul(
-                            &Matrix2D::new(
-                                0., 1.,
-                                -1., 0.,
-                                x, y
-                            )
-                        ));
-                        Zero::zero()
-                    }
-                };
-
-                render_context.font_ctx.get_render_font_from_template(
-                    &text.text_run.font_template,
-                    text.text_run.actual_pt_size,
-                    render_context.opts.render_backend
-                ).borrow().draw_text_into_context(
-                    render_context,
-                    &*text.text_run,
-                    &text.range,
-                    baseline_origin,
-                    text.text_color,
-                    render_context.opts.enable_text_antialiasing
-                );
-
-                // Undo the transform, only when we did one.
-                if text.orientation != Upright {
-                    render_context.draw_target.set_transform(current_transform)
-                }
+                render_context.draw_text(&**text, current_transform);
             }
 
             ImageDisplayItemClass(ref image_item) => {
@@ -608,10 +490,6 @@ impl DisplayItem {
 
             PseudoDisplayItemClass(_) => {}
         }
-
-        if need_to_clip {
-            render_context.draw_pop_clip();
-        }
     }
 
     pub fn base<'a>(&'a self) -> &'a BaseDisplayItem {
@@ -645,13 +523,13 @@ impl DisplayItem {
         for _ in range(0, level) {
             indent.push_str("| ")
         }
-        debug!("{}+ {}", indent, self);
+        println!("{}+ {}", indent, self);
     }
 }
 
 impl fmt::Show for DisplayItem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} @ {} ({:x})",
+        write!(f, "{} @ {} ({:x}) [{}]",
             match *self {
                 SolidColorDisplayItemClass(_) => "SolidColor",
                 TextDisplayItemClass(_) => "Text",
@@ -662,6 +540,7 @@ impl fmt::Show for DisplayItem {
             },
             self.base().bounds,
             self.base().node.id(),
+            self.base().level
         )
     }
 }
