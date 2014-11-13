@@ -40,9 +40,9 @@ use devtools_traits::{DevtoolScriptControlMsg, EvaluateJS, EvaluateJSReply, GetD
 use devtools_traits::{GetChildren, GetLayout};
 use script_traits::{CompositorEvent, ResizeEvent, ReflowEvent, ClickEvent, MouseDownEvent};
 use script_traits::{MouseMoveEvent, MouseUpEvent, ConstellationControlMsg, ScriptTaskFactory};
-use script_traits::{ResizeMsg, AttachLayoutMsg, LoadMsg, SendEventMsg, ResizeInactiveMsg};
-use script_traits::{ExitPipelineMsg, NewLayoutInfo, OpaqueScriptLayoutChannel, ScriptControlChan};
-use script_traits::ReflowCompleteMsg;
+use script_traits::{ResizeMsg, AttachLayoutMsg, LoadMsg, ViewportMsg, SendEventMsg};
+use script_traits::{ResizeInactiveMsg, ExitPipelineMsg, NewLayoutInfo, OpaqueScriptLayoutChannel};
+use script_traits::{ScriptControlChan, ReflowCompleteMsg, UntrustedNodeAddress};
 use servo_msg::compositor_msg::{FinishedLoading, LayerId, Loading};
 use servo_msg::compositor_msg::{ScriptListener};
 use servo_msg::constellation_msg::{ConstellationChan, LoadCompleteMsg, LoadUrlMsg, NavigationDirection};
@@ -495,6 +495,13 @@ impl ScriptTask {
                     pending.push_all_move(node_addresses);
                     needs_reflow.insert(id);
                 }
+                FromConstellation(ViewportMsg(id, rect)) => {
+                    let mut page = self.page.borrow_mut();
+                    let inner_page = page.find(id).expect("Page rect message sent to nonexistent pipeline");
+                    if inner_page.set_page_clip_rect_with_new_viewport(rect) {
+                        needs_reflow.insert(id);
+                    }
+                }
                 _ => {
                     sequential.push(event);
                 }
@@ -530,6 +537,7 @@ impl ScriptTask {
                 FromConstellation(ReflowCompleteMsg(id, reflow_id)) => self.handle_reflow_complete_msg(id, reflow_id),
                 FromConstellation(ResizeInactiveMsg(id, new_size)) => self.handle_resize_inactive_msg(id, new_size),
                 FromConstellation(ExitPipelineMsg(id)) => if self.handle_exit_pipeline_msg(id) { return false },
+                FromConstellation(ViewportMsg(..)) => fail!("should have handled ViewportMsg already"),
                 FromScript(ExitWindowMsg(id)) => self.handle_exit_window_msg(id),
                 FromConstellation(ResizeMsg(..)) => fail!("should have handled ResizeMsg already"),
                 FromScript(XHRProgressMsg(addr, progress)) => XMLHttpRequest::handle_progress(addr, progress),
@@ -885,172 +893,22 @@ impl ScriptTask {
     fn handle_event(&self, pipeline_id: PipelineId, event: CompositorEvent) {
         match event {
             ResizeEvent(new_size) => {
-                debug!("script got resize event: {:?}", new_size);
-
-                let window = {
-                    let page = get_page(&*self.page.borrow(), pipeline_id);
-                    page.window_size.set(new_size);
-
-                    let frame = page.frame();
-                    if frame.is_some() {
-                        self.force_reflow(&*page);
-                    }
-
-                    let fragment_node =
-                        page.fragment_name
-                            .borrow_mut()
-                            .take()
-                            .and_then(|name| page.find_fragment_node(name))
-                            .root();
-                    match fragment_node {
-                        Some(node) => self.scroll_fragment_point(pipeline_id, *node),
-                        None => {}
-                    }
-
-                    frame.as_ref().map(|frame| Temporary::new(frame.window.clone()))
-                };
-
-                match window.root() {
-                    Some(window) => {
-                        // http://dev.w3.org/csswg/cssom-view/#resizing-viewports
-                        // https://dvcs.w3.org/hg/dom3events/raw-file/tip/html/DOM3-Events.html#event-type-resize
-                        let uievent = UIEvent::new(window.clone(),
-                                                   "resize".to_string(), false,
-                                                   false, Some(window.clone()),
-                                                   0i32).root();
-                        let event: JSRef<Event> = EventCast::from_ref(*uievent);
-
-                        let wintarget: JSRef<EventTarget> = EventTargetCast::from_ref(*window);
-                        let _ = wintarget.dispatch_event_with_target(None, event);
-                    }
-                    None => ()
-                }
+              self.handle_resize_event(pipeline_id, new_size);
             }
 
             // FIXME(pcwalton): This reflows the entire document and is not incremental-y.
             ReflowEvent(to_dirty) => {
-                debug!("script got reflow event");
-                assert_eq!(to_dirty.len(), 0);
-                let page = get_page(&*self.page.borrow(), pipeline_id);
-                let frame = page.frame();
-                if frame.is_some() {
-                    let in_layout = page.layout_join_port.borrow().is_some();
-                    if in_layout {
-                        page.pending_reflows.set(page.pending_reflows.get() + 1);
-                    } else {
-                        self.force_reflow(&*page);
-                    }
-                }
+              self.handle_reflow_event(pipeline_id, to_dirty);
             }
 
             ClickEvent(_button, point) => {
-                debug!("ClickEvent: clicked at {:?}", point);
-                let page = get_page(&*self.page.borrow(), pipeline_id);
-                match page.hit_test(&point) {
-                    Some(node_address) => {
-                        debug!("node address is {:?}", node_address);
-
-                        let temp_node =
-                                node::from_untrusted_node_address(
-                                    self.js_runtime.ptr, node_address).root();
-
-                        let maybe_node = if !temp_node.is_element() {
-                            temp_node.ancestors().find(|node| node.is_element())
-                        } else {
-                            Some(*temp_node)
-                        };
-
-                        match maybe_node {
-                            Some(node) => {
-                                debug!("clicked on {:s}", node.debug_str());
-                                // Prevent click event if form control element is disabled.
-                                if node.click_event_filter_by_disabled_state() { return; }
-                                match *page.frame() {
-                                    Some(ref frame) => {
-                                        let window = frame.window.root();
-                                        let event =
-                                            Event::new(&global::Window(*window),
-                                                       "click".to_string(),
-                                                       Bubbles, Cancelable).root();
-                                        let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(node);
-                                        let _ = eventtarget.dispatch_event_with_target(None, *event);
-
-                                        window.flush_layout();
-                                    }
-                                    None => {}
-                                }
-                            }
-                            None => {}
-                        }
-                    }
-
-                    None => {}
-                }
+              self.handle_click_event(pipeline_id, _button, point);
             }
+
             MouseDownEvent(..) => {}
             MouseUpEvent(..) => {}
             MouseMoveEvent(point) => {
-                let page = get_page(&*self.page.borrow(), pipeline_id);
-                match page.get_nodes_under_mouse(&point) {
-                    Some(node_address) => {
-
-                        let mut target_list = vec!();
-                        let mut target_compare = false;
-
-                        let mouse_over_targets = &mut *self.mouse_over_targets.borrow_mut();
-                        match *mouse_over_targets {
-                            Some(ref mut mouse_over_targets) => {
-                                for node in mouse_over_targets.iter_mut() {
-                                    let node = node.root();
-                                    node.set_hover_state(false);
-                                }
-                            }
-                            None => {}
-                        }
-
-                        for node_address in node_address.iter() {
-
-                            let temp_node =
-                                node::from_untrusted_node_address(
-                                    self.js_runtime.ptr, *node_address);
-
-                            let maybe_node = temp_node.root().ancestors().find(|node| node.is_element());
-                            match maybe_node {
-                                Some(node) => {
-                                    node.set_hover_state(true);
-
-                                    match *mouse_over_targets {
-                                        Some(ref mouse_over_targets) => {
-                                            if !target_compare {
-                                                target_compare = !mouse_over_targets.contains(&JS::from_rooted(node));
-                                            }
-                                        }
-                                        None => {}
-                                    }
-                                    target_list.push(JS::from_rooted(node));
-                                }
-                                None => {}
-                            }
-                        }
-                        match *mouse_over_targets {
-                            Some(ref mouse_over_targets) => {
-                                if mouse_over_targets.len() != target_list.len() {
-                                    target_compare = true;
-                                }
-                            }
-                            None => { target_compare = true; }
-                        }
-
-                        if target_compare {
-                            if mouse_over_targets.is_some() {
-                                self.force_reflow(&*page);
-                            }
-                            *mouse_over_targets = Some(target_list);
-                        }
-                    }
-
-                    None => {}
-              }
+              self.handle_mouse_move_event(pipeline_id, point);
             }
         }
     }
@@ -1071,8 +929,177 @@ impl ScriptTask {
                 self.scroll_fragment_point(pipeline_id, *node);
             }
             None => {}
-         }
-     }
+        }
+    }
+
+
+    fn handle_resize_event(&self, pipeline_id: PipelineId, new_size: WindowSizeData) {
+        debug!("script got resize event: {:?}", new_size);
+
+        let window = {
+            let page = get_page(&*self.page.borrow(), pipeline_id);
+            page.window_size.set(new_size);
+
+            let frame = page.frame();
+            if frame.is_some() {
+                self.force_reflow(&*page);
+            }
+
+            let fragment_node =
+                page.fragment_name
+                    .borrow_mut()
+                    .take()
+                    .and_then(|name| page.find_fragment_node(name))
+                    .root();
+            match fragment_node {
+                Some(node) => self.scroll_fragment_point(pipeline_id, *node),
+                None => {}
+            }
+
+            frame.as_ref().map(|frame| Temporary::new(frame.window.clone()))
+        };
+
+        match window.root() {
+            Some(window) => {
+                // http://dev.w3.org/csswg/cssom-view/#resizing-viewports
+                // https://dvcs.w3.org/hg/dom3events/raw-file/tip/html/DOM3-Events.html#event-type-resize
+                let uievent = UIEvent::new(window.clone(),
+                                           "resize".to_string(), false,
+                                           false, Some(window.clone()),
+                                           0i32).root();
+                let event: JSRef<Event> = EventCast::from_ref(*uievent);
+
+                let wintarget: JSRef<EventTarget> = EventTargetCast::from_ref(*window);
+                let _ = wintarget.dispatch_event_with_target(None, event);
+            }
+            None => ()
+        }
+    }
+
+    fn handle_reflow_event(&self, pipeline_id: PipelineId, to_dirty: SmallVec1<UntrustedNodeAddress>) {
+        debug!("script got reflow event");
+        assert_eq!(to_dirty.len(), 0);
+        let page = get_page(&*self.page.borrow(), pipeline_id);
+        let frame = page.frame();
+        if frame.is_some() {
+            let in_layout = page.layout_join_port.borrow().is_some();
+            if in_layout {
+                page.pending_reflows.set(page.pending_reflows.get() + 1);
+            } else {
+                self.force_reflow(&*page);
+            }
+        }
+    }
+
+    fn handle_click_event(&self, pipeline_id: PipelineId, _button: uint, point: Point2D<f32>) {
+        debug!("ClickEvent: clicked at {:?}", point);
+        let page = get_page(&*self.page.borrow(), pipeline_id);
+        match page.hit_test(&point) {
+            Some(node_address) => {
+                debug!("node address is {:?}", node_address);
+
+                let temp_node =
+                        node::from_untrusted_node_address(
+                            self.js_runtime.ptr, node_address).root();
+
+                let maybe_node = if !temp_node.is_element() {
+                    temp_node.ancestors().find(|node| node.is_element())
+                } else {
+                    Some(*temp_node)
+                };
+
+                match maybe_node {
+                    Some(node) => {
+                        debug!("clicked on {:s}", node.debug_str());
+                        // Prevent click event if form control element is disabled.
+                        if node.click_event_filter_by_disabled_state() { return; }
+                        match *page.frame() {
+                            Some(ref frame) => {
+                                let window = frame.window.root();
+                                let event =
+                                    Event::new(&global::Window(*window),
+                                               "click".to_string(),
+                                               Bubbles, Cancelable).root();
+                                let eventtarget: JSRef<EventTarget> = EventTargetCast::from_ref(node);
+                                let _ = eventtarget.dispatch_event_with_target(None, *event);
+
+                                window.flush_layout();
+                            }
+                            None => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+
+            None => {}
+        }
+    }
+
+
+    fn handle_mouse_move_event(&self, pipeline_id: PipelineId, point: Point2D<f32>) {
+        let page = get_page(&*self.page.borrow(), pipeline_id);
+        match page.get_nodes_under_mouse(&point) {
+            Some(node_address) => {
+
+                let mut target_list = vec!();
+                let mut target_compare = false;
+
+                let mouse_over_targets = &mut *self.mouse_over_targets.borrow_mut();
+                match *mouse_over_targets {
+                    Some(ref mut mouse_over_targets) => {
+                        for node in mouse_over_targets.iter_mut() {
+                            let node = node.root();
+                            node.set_hover_state(false);
+                        }
+                    }
+                    None => {}
+                }
+
+                for node_address in node_address.iter() {
+
+                    let temp_node =
+                        node::from_untrusted_node_address(
+                            self.js_runtime.ptr, *node_address);
+
+                    let maybe_node = temp_node.root().ancestors().find(|node| node.is_element());
+                    match maybe_node {
+                        Some(node) => {
+                            node.set_hover_state(true);
+
+                            match *mouse_over_targets {
+                                Some(ref mouse_over_targets) => {
+                                    if !target_compare {
+                                        target_compare = !mouse_over_targets.contains(&JS::from_rooted(node));
+                                    }
+                                }
+                                None => {}
+                            }
+                            target_list.push(JS::from_rooted(node));
+                        }
+                        None => {}
+                    }
+                }
+                match *mouse_over_targets {
+                    Some(ref mouse_over_targets) => {
+                        if mouse_over_targets.len() != target_list.len() {
+                            target_compare = true;
+                        }
+                    }
+                    None => { target_compare = true; }
+                }
+
+                if target_compare {
+                    if mouse_over_targets.is_some() {
+                        self.force_reflow(&*page);
+                    }
+                    *mouse_over_targets = Some(target_list);
+                }
+            }
+
+            None => {}
+      }
+    }
 }
 
 /// Shuts down layout for the given page tree.
@@ -1117,3 +1144,4 @@ fn get_page(page: &Rc<Page>, pipeline_id: PipelineId) -> Rc<Page> {
         message for a layout channel that is not associated with this script task.\
          This is a bug.")
 }
+

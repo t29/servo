@@ -89,6 +89,7 @@ pub mod dom {
     pub mod characterdata;
     pub mod domrect;
     pub mod domrectlist;
+    pub mod domstringmap;
     pub mod comment;
     pub mod console;
     mod create;
@@ -193,6 +194,7 @@ pub mod dom {
     pub mod range;
     pub mod screen;
     pub mod servohtmlparser;
+    pub mod storage;
     pub mod text;
     pub mod treewalker;
     pub mod uievent;

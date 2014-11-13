@@ -13,7 +13,7 @@ use dom::bindings::codegen::InheritTypes::{EventCast, EventTargetCast, XMLHttpRe
 use dom::bindings::conversions::ToJSValConvertible;
 use dom::bindings::error::{Error, ErrorResult, Fallible, InvalidState, InvalidAccess};
 use dom::bindings::error::{Network, Syntax, Security, Abort, Timeout};
-use dom::bindings::global::{GlobalField, GlobalRef, WorkerField};
+use dom::bindings::global::{GlobalField, GlobalRef, WorkerRoot};
 use dom::bindings::js::{MutNullableJS, JS, JSRef, Temporary, OptionalRootedRootable};
 use dom::bindings::str::ByteString;
 use dom::bindings::utils::{Reflectable, Reflector, reflect_dom_object};
@@ -698,8 +698,8 @@ impl<'a> XMLHttpRequestMethods for JSRef<'a, XMLHttpRequest> {
         self.response_type.get()
     }
     fn SetResponseType(self, response_type: XMLHttpRequestResponseType) -> ErrorResult {
-        match self.global {
-            WorkerField(_) if response_type == XMLHttpRequestResponseTypeValues::Document
+        match self.global.root() {
+            WorkerRoot(_) if response_type == XMLHttpRequestResponseTypeValues::Document
             => return Ok(()),
             _ => {}
         }
@@ -890,8 +890,8 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
             },
             LoadingMsg(_, partial_response) => {
                 // For synchronous requests, this should not fire any events, and just store data
-                // Part of step 13, send() (processing response body)
-                // XXXManishearth handle errors, if any (substep 1)
+                // Part of step 11, send() (processing response body)
+                // XXXManishearth handle errors, if any (substep 2)
 
                 *self.response.borrow_mut() = partial_response;
                 if !self.sync.get() {
@@ -903,22 +903,23 @@ impl<'a> PrivateXMLHttpRequestHelpers for JSRef<'a, XMLHttpRequest> {
                 }
             },
             DoneMsg(_) => {
-                // Part of step 13, send() (processing response end of file)
-                // XXXManishearth handle errors, if any (substep 1)
+                assert!(self.ready_state.get() == HeadersReceived ||
+                        self.ready_state.get() == Loading ||
+                        self.sync.get());
 
-                // Substep 3
-                if self.ready_state.get() == Loading || self.sync.get() {
-                    // Subsubsteps 2-4
-                    self.send_flag.set(false);
-                    self.change_ready_state(XHRDone);
-                    return_if_fetch_was_terminated!();
-                    // Subsubsteps 5-7
-                    self.dispatch_response_progress_event("progress".to_string());
-                    return_if_fetch_was_terminated!();
-                    self.dispatch_response_progress_event("load".to_string());
-                    return_if_fetch_was_terminated!();
-                    self.dispatch_response_progress_event("loadend".to_string());
-                }
+                // Part of step 11, send() (processing response end of file)
+                // XXXManishearth handle errors, if any (substep 2)
+
+                // Subsubsteps 5-7
+                self.send_flag.set(false);
+                self.change_ready_state(XHRDone);
+                return_if_fetch_was_terminated!();
+                // Subsubsteps 10-12
+                self.dispatch_response_progress_event("progress".to_string());
+                return_if_fetch_was_terminated!();
+                self.dispatch_response_progress_event("load".to_string());
+                return_if_fetch_was_terminated!();
+                self.dispatch_response_progress_event("loadend".to_string());
             },
             ErroredMsg(_, e) => {
                 self.send_flag.set(false);

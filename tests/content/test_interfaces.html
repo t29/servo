@@ -67,6 +67,7 @@ var interfaceNamesInGlobalScope = [
   "DOMImplementation",
   "DOMParser",
   "DOMTokenList",
+  "DOMStringMap",
   "Element",
   "Event",
   "EventTarget",
@@ -155,6 +156,7 @@ var interfaceNamesInGlobalScope = [
   "ProgressEvent",
   "Range",
   "Screen",
+  "Storage",
   "TestBinding", // XXX
   "Text",
   "TreeWalker",
@@ -204,5 +206,4 @@ for (var name of Object.keys(interfaceMap)) {
 }
 is(Object.keys(interfaceMap).length, 0,
    "The following interface(s) are not enumerated: " + Object.keys(interfaceMap).join(", "));
-finish();
 </script>
