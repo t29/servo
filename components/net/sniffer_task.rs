@@ -33,7 +33,10 @@ impl SnifferManager {
 impl SnifferManager {
   fn start(&self, next_rx: Sender<LoadResponse>) {
     loop {
-      self.load(next_rx.clone(), self.data_receiver.recv());
+      match self.data_receiver.try_recv() {
+        Ok(snif_data) => self.load(next_rx.clone(), snif_data),
+        _ => {}
+      }
     }
   }
 
