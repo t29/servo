@@ -34,13 +34,9 @@ impl SnifferManager {
   fn start(&self, next_rx: Sender<LoadResponse>) {
     loop {
       match self.data_receiver.try_recv() {
-        Ok(snif_data) => self.load(next_rx.clone(), snif_data),
+        Ok(snif_data) => next_rx.send(snif_data),
         _ => {}
       }
     }
-  }
-
-  fn load(&self, next_rx: Sender<LoadResponse>, snif_data: LoadResponse) {
-    next_rx.send(snif_data);
   }
 }
