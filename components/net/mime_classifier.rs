@@ -21,16 +21,16 @@ impl ByteMatcher {
     }
     //TODO replace with iterators if I ever figure them out...
     let mut i = 0u;
-    let max_i = data.len()-self.pattern.len();   
-    
+    let max_i = data.len()-self.pattern.len();
+
     loop {
-      
+
       if !self.leading_ignore.iter().any(|x| *x == data[i]) { break;}
-        
+
       i=i+1;
       if i>max_i {return false;}
     }
-    
+
     for j in range(0u,self.pattern.len()) {
       if (data[i] & self.mask[j])!=
         (self.pattern[j] & self.mask[j]) {
@@ -177,6 +177,334 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
+  // doctype terminated with Tag terminating (TT) Byte: 0x20 (SP)
+  fn text_html_doctype_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x21u8,0x44u8,0x4Fu8,0x43u8,0x54u8,0x59u8,0x50u8,
+                   0x45u8,0x20u8,0x48u8,0x54u8,0x4Du8,0x4Cu8,0x20u8],
+      mask:   vec![0xFFu8,0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,
+                   0xDFu8,0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // doctype terminated with Tag terminating (TT) Byte: 0x3E (">")
+  fn text_html_doctype_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x21u8,0x44u8,0x4Fu8,0x43u8,0x54u8,0x59u8,0x50u8,
+                   0x45u8,0x20u8,0x48u8,0x54u8,0x4Du8,0x4Cu8,0x3Eu8],
+      mask:   vec![0xFFu8,0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,
+                   0xDFu8,0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // HTML terminated with Tag terminating (TT) Byte: 0x20 (SP)
+  fn text_html_page_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x54u8,0x4Du8,0x4Cu8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // HTML terminated with Tag terminating (TT) Byte: 0x3E (">")
+  fn text_html_page_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x54u8,0x4Du8,0x4Cu8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // head terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_head_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x45u8,0x41u8,0x44u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // head terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_head_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x45u8,0x41u8,0x44u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // script terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_script_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x53u8,0x43u8,0x52u8,0x49u8,0x50u8,0x54u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // script terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_script_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x53u8,0x43u8,0x52u8,0x49u8,0x50u8,0x54u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // iframe terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_iframe_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x49u8,0x46u8,0x52u8,0x41u8,0x4Du8,0x45u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // iframe terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_iframe_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x49u8,0x46u8,0x52u8,0x41u8,0x4Du8,0x45u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // h1 terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_h1_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x31u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // h1 terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_h1_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x48u8,0x31u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // div terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_div_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x44u8,0x49u8,0x56u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // div terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_div_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x44u8,0x49u8,0x56u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // font terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_font_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x46u8,0x4Fu8,0x4Eu8,0x54u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // font terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_font_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x46u8,0x4Fu8,0x4Eu8,0x54u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // table terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_table_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x54u8,0x41u8,0x42u8,0x4Cu8,0x45u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // table terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_table_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x54u8,0x41u8,0x42u8,0x4Cu8,0x45u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // a terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_a_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x41u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // a terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_a_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x41u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // style terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_style_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x53u8,0x54u8,0x59u8,0x4Cu8,0x45u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // style terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_style_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x53u8,0x54u8,0x59u8,0x4Cu8,0x45u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // title terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_title_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x54u8,0x49u8,0x54u8,0x4Cu8,0x45u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // title terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_title_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x54u8,0x49u8,0x54u8,0x4Cu8,0x45u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // b terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_b_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // b terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_b_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // body terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_body_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x4Fu8,0x44u8,0x59u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // body terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_body_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x4Fu8,0x44u8,0x59u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // br terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_br_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x52u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // br terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_br_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x42u8,0x52u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // p terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_p_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x50u8,0x20u8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // p terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_p_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x50u8,0x3Eu8],
+      mask:   vec![0xFFu8,0xDFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // comment terminated with Tag Terminating (TT) Byte: 0x20 (SP)
+  fn text_html_comment_20()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x21u8,0x2Du8,0x2Du8,0x20u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // comment terminated with Tag Terminating (TT) Byte: 0x3E (">")
+  fn text_html_comment_3E()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x21u8,0x2Du8,0x2Du8,0x3Eu8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // XML
+  fn text_xml()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x3Cu8,0x3Fu8,0x78u8,0x6Du8,0x6Cu8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  // PDF
+  fn text_pdf()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x25u8,0x50u8,0x44u8,0x46u8,0x2Du8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("text".to_string(),"html".to_string()),
+    }
+  }
+
   fn application_vnd_ms_font_object()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
@@ -292,7 +620,7 @@ impl MIMEChecker for ByteMatcher {
   fn classify(&self, data:&Vec<u8>)->Option<(String,String)>
   {
    return if self.matches(data) {
-      Some(self.content_type.clone()) 
+      Some(self.content_type.clone())
     } else {
       None
     };
@@ -410,7 +738,7 @@ impl MIMEClassifier {
   fn new()->MIMEClassifier {
      //TODO These should be configured from a settings file
      //     and not hardcoded
-     
+
      let mut ret = MIMEClassifier{byte_matchers:Vec::new()};
      ret.byte_matchers.push(box ByteMatcher::image_x_icon());
      ret.byte_matchers.push(box ByteMatcher::image_x_icon_cursor());
@@ -440,11 +768,11 @@ impl MIMEClassifier {
      ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16le_bom());
      ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16be_bom());
      ret.byte_matchers.push(box ByteMatcher::application_postscript());
-     
+
      return ret;
-     
+
   }
-  
+
   fn classify(&self,data:&Vec<u8>)->Option<(String,String)> {
     for matcher in self.byte_matchers.iter()
     {
@@ -501,7 +829,7 @@ fn test_classify_parsable_content_types() {
               Ok(data) => {
                 match classifier.classify(&data)
                 {
-                  Some(mime)=>{ 
+                  Some(mime)=>{
                     let parsed_type=mime.ref0().clone();
                     let parsed_subtp=mime.ref1().clone();
                      if (parsed_type!=type_)||(parsed_subtp!=subtype) {
@@ -520,4 +848,3 @@ fn test_classify_parsable_content_types() {
     }
   }
 }
-
