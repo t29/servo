@@ -10,13 +10,13 @@ struct ByteMatcher {
   pattern: Vec<u8>,
   mask: Vec<u8>,
   leading_ignore: Vec<u8>,
-  MIME_type: String,
+  mime_type: String,
 }
 
 impl ByteMatcher {
   fn matches(&self,data:&Vec<u8>)->bool {
 
-    if (data.len() < self.pattern.len()) {
+    if data.len() < self.pattern.len() {
       return false;
     }
     //TODO replace with iterators if I ever figure them out...
@@ -25,11 +25,10 @@ impl ByteMatcher {
     
     loop {
       
-      if (!self.leading_ignore.iter().any(|x|
-        *x == data[i])) { break;}
+      if !self.leading_ignore.iter().any(|x| *x == data[i]) { break;}
         
       i=i+1;
-      if (i>max_i) {return false;}
+      if i>max_i {return false;}
     }
     
     for j in range(0u,self.pattern.len()) {
@@ -46,22 +45,65 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x01u8,0x00u8],
       mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      MIME_type:"image/x-icon".to_string(),
+      mime_type:"image/x-icon".to_string(),
       leading_ignore:vec![]}
   }
   fn windows_cursor()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x02u8,0x00u8],
-      mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      MIME_type:"image/x-icon".to_string(),
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/x-icon".to_string(),
       leading_ignore:vec![]
     }
   }
   fn windows_bmp()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x42u8,0x4Du8],
-      mask:vec![0xFFu8,0xFFu8],
-      MIME_type:"image/bmp".to_string(),
+      mask:   vec![0xFFu8,0xFFu8],
+      mime_type:"image/bmp".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+  fn gif89a()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x39u8,0x61u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/gif".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+  fn gif87a()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x37u8,0x61u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/gif".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+  fn webp()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x52u8,0x49u8,0x46u8,0x46u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x57u8,0x45u8,0x42u8,0x50u8,0x56u8,0x50u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/webp".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+
+  fn png()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x89u8,0x50u8,0x4Eu8,0x47u8,0x0Du8,0x0Au8,0x1Au8,0x0Au8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/png".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+  fn jpeg()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0xFFu8,0xD8u8,0xFFu8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8],
+      mime_type:"image/jpeg".to_string(),
       leading_ignore:vec![]
     }
   }
@@ -71,7 +113,7 @@ impl MIMEChecker for ByteMatcher {
   fn classify(&self, data:&Vec<u8>)->Option<String>
   {
    return if self.matches(data) {
-      Some(self.MIME_type.clone()) 
+      Some(self.mime_type.clone()) 
     } else {
       None
     };
@@ -93,7 +135,7 @@ fn test_sniff_windows_icon() {
         panic!("Didn't read mime type")
       }
     },
-    Err(e) => panic!("Couldn't read from file!")
+    Err(e) => panic!("Couldn't read from file with error {}",e)
   }
 
 }
@@ -112,7 +154,7 @@ fn test_sniff_windows_cursor() {
         panic!("Didn't read mime type")
       }
     },
-    Err(e) => panic!("Couldn't read from file!")
+    Err(e) => panic!("Couldn't read from file with error {}",e)
   }
 }
 
@@ -130,9 +172,8 @@ fn test_sniff_windows_bmp() {
         panic!("Didn't read mime type")
       }
     },
-    Err(e) => panic!("Couldn't read from file!")
+    Err(e) => panic!("Couldn't read from file with error {}",e)
   }
-
 }
 
 struct MIMEClassifier
@@ -151,7 +192,11 @@ impl MIMEClassifier
      ret.byte_matchers.push(box ByteMatcher::windows_icon());
      ret.byte_matchers.push(box ByteMatcher::windows_cursor());
      ret.byte_matchers.push(box ByteMatcher::windows_bmp());
-     
+     ret.byte_matchers.push(box ByteMatcher::gif89a());
+     ret.byte_matchers.push(box ByteMatcher::gif87a());
+     ret.byte_matchers.push(box ByteMatcher::webp());
+     ret.byte_matchers.push(box ByteMatcher::png());
+     ret.byte_matchers.push(box ByteMatcher::jpeg());
      return ret;
      
   }
@@ -190,14 +235,14 @@ fn test_classify_parsable_mime_types() {
                   match classifier.classify(&data)
                   {
                     Some(x)=>{ 
-                      if (x!=type_string.to_string()) {
+                      if x!=type_string.to_string() {
                         panic!("File {} parsed incorrectly should be {}, parsed as {}",rel_path.as_str(),x,type_string);
                       }
                     }
                     None=>{panic!("No classification found for {}",rel_path.as_str());}
                   }
                 }
-                Err(e) => {panic!("Couldn't read from file {}",p.as_str());}
+                Err(e) => {panic!("Couldn't read from file {} with error {}",p.as_str(),e);}
               }
                 
               }
