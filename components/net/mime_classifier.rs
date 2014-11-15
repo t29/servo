@@ -227,6 +227,30 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
+  fn application_x_gzip()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x1Fu8,0x8Bu8,0x08u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"x-gizp".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn application_zip()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x50u8,0x4Bu8,0x03u8,0x04u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"zip".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn application_x_rar_compressed()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x52u8,0x61u8,0x72u8,0x20u8,0x1Au8,0x07u8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"x-rar-compressed".to_string()),
+      leading_ignore:vec![]
+    }
+  }
 }
 
 impl MIMEChecker for ByteMatcher {
@@ -330,6 +354,10 @@ impl MIMEClassifier
      ret.byte_matchers.push(box ByteMatcher::open_type());
      ret.byte_matchers.push(box ByteMatcher::true_type());
      ret.byte_matchers.push(box ByteMatcher::application_vnd_ms_font_object());
+     ret.byte_matchers.push(box ByteMatcher::application_x_gzip());
+     ret.byte_matchers.push(box ByteMatcher::application_zip());
+     ret.byte_matchers.push(box ByteMatcher::application_x_rar_compressed());
+     
      return ret;
      
   }
