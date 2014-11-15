@@ -177,6 +177,56 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
+  fn application_vnd_ms_font_object()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x4Cu8,0x50u8],
+      mask:   vec![0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x00u8,0x00u8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"vnd.ms-fontobject".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+
+  fn true_type()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x00u8,0x01u8,0x00u8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("(TrueType)".to_string(),"".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn open_type()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x4Fu8,0x54u8,0x54u8,0x4Fu8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("(OpenType)".to_string(),"".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+
+  fn true_type_collection()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x74u8,0x74u8,0x63u8,0x66u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("(TrueType Collection)".to_string(),"".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn application_font_woff()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x77u8,0x4Fu8,0x46u8,0x46u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"font-woff".to_string()),
+      leading_ignore:vec![]
+    }
+  }
 }
 
 impl MIMEChecker for ByteMatcher {
@@ -275,6 +325,11 @@ impl MIMEClassifier
      ret.byte_matchers.push(box ByteMatcher::audio_midi());
      ret.byte_matchers.push(box ByteMatcher::video_avi());
      ret.byte_matchers.push(box ByteMatcher::audio_wave());
+     ret.byte_matchers.push(box ByteMatcher::application_font_woff());
+     ret.byte_matchers.push(box ByteMatcher::true_type_collection());
+     ret.byte_matchers.push(box ByteMatcher::open_type());
+     ret.byte_matchers.push(box ByteMatcher::true_type());
+     ret.byte_matchers.push(box ByteMatcher::application_vnd_ms_font_object());
      return ret;
      
   }
