@@ -4,9 +4,9 @@
 
 //! A task that takes a URL and streams back the binary data.
 
-//use about_loader;
-// use data_loader;
-// use file_loader;
+use about_loader;
+use data_loader;
+use file_loader;
 use http_loader;
 use sniffer_task;
 
@@ -224,10 +224,10 @@ impl ResourceManager {
         let sniffer_task = sniffer_task::new_sniffer_task();
 
         let loader = match load_data.url.scheme.as_slice() {
-            // "file" => file_loader::factory,
+            "file" => file_loader::factory,
             "http" | "https" => http_loader::factory,
-            // "data" => data_loader::factory,
-            // "about" => about_loader::factory,
+            "data" => data_loader::factory,
+            "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
                 start_sending(sniffer_task, start_chan.clone(), Metadata::default(load_data.url))
