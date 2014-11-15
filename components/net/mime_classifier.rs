@@ -1,7 +1,6 @@
 use std::io::File;
 use std::io::fs;
 use std::io::fs::PathExtensions;
-use std::str;
 
 trait MIMEChecker {
   fn classify(&self, data:&Vec<u8>)->Option<(String,String)>;
@@ -42,14 +41,14 @@ impl ByteMatcher {
     return true;
   }
 //TODO These should probably be configured not hard coded
-  fn windows_icon()->ByteMatcher {
+  fn image_x_icon()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x01u8,0x00u8],
       mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
       content_type:("image".to_string(),"x-icon".to_string()),
       leading_ignore:vec![]}
   }
-  fn windows_cursor()->ByteMatcher {
+  fn image_x_icon_cursor()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x02u8,0x00u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
@@ -57,7 +56,7 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
-  fn windows_bmp()->ByteMatcher {
+  fn image_bmp()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x42u8,0x4Du8],
       mask:   vec![0xFFu8,0xFFu8],
@@ -65,7 +64,7 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
-  fn gif89a()->ByteMatcher {
+  fn image_gif89a()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x39u8,0x61u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
@@ -73,7 +72,7 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
-  fn gif87a()->ByteMatcher {
+  fn image_gif87a()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x37u8,0x61u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
@@ -81,7 +80,7 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
-  fn webp()->ByteMatcher {
+  fn image_webp()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x52u8,0x49u8,0x46u8,0x46u8,0x00u8,0x00u8,0x00u8,0x00u8,
                    0x57u8,0x45u8,0x42u8,0x50u8,0x56u8,0x50u8],
@@ -92,7 +91,7 @@ impl ByteMatcher {
     }
   }
 
-  fn png()->ByteMatcher {
+  fn image_png()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x89u8,0x50u8,0x4Eu8,0x47u8,0x0Du8,0x0Au8,0x1Au8,0x0Au8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
@@ -100,11 +99,81 @@ impl ByteMatcher {
       leading_ignore:vec![]
     }
   }
-  fn jpeg()->ByteMatcher {
+  fn image_jpeg()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0xFFu8,0xD8u8,0xFFu8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8],
       content_type:("image".to_string(),"jpeg".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn video_webm()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x1Au8,0x45u8,0xDFu8,0xA3u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("video".to_string(),"webm".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn audio_basic()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x2Eu8,0x73u8,0x6Eu8,0x64u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("audio".to_string(),"basic".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn audio_aiff()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x46u8,0x4Fu8,0x52u8,0x4Du8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x41u8,0x49u8,0x46u8,0x46u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("audio".to_string(),"aiff".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn audio_mpeg()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x49u8,0x44u8,0x33u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8],
+      content_type:("audio".to_string(),"mpeg".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn application_ogg()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x4Fu8,0x67u8,0x67u8,0x53u8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"ogg".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn audio_midi()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x4Du8,0x54u8,0x68u8,0x64u8,0x00u8,0x00u8,0x00u8,0x06u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("audio".to_string(),"midi".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn video_avi()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x52u8,0x49u8,0x46u8,0x46u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x41u8,0x56u8,0x49u8,0x20u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("video".to_string(),"avi".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn audio_wave()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x52u8,0x49u8,0x46u8,0x46u8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0x57u8,0x41u8,0x56u8,0x45u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0x00u8,0x00u8,0x00u8,0x00u8,
+                   0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      content_type:("audio".to_string(),"wave".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -124,7 +193,7 @@ impl MIMEChecker for ByteMatcher {
 
 #[test]
 fn test_sniff_windows_icon() {
-  let matcher = ByteMatcher::windows_icon();
+  let matcher = ByteMatcher::image_x_icon();
 
   let p = Path::new("./tests/content/parsable_mime/image/x-icon/test.ico");
   let mut file = File::open(&p);
@@ -143,7 +212,7 @@ fn test_sniff_windows_icon() {
 
 #[test]
 fn test_sniff_windows_cursor() {
-  let matcher = ByteMatcher::windows_cursor();
+  let matcher = ByteMatcher::image_x_icon_cursor();
 
   let p = Path::new("./tests/content/parsable_mime/image/x-icon/test_cursor.ico");
   let mut file = File::open(&p);
@@ -161,7 +230,7 @@ fn test_sniff_windows_cursor() {
 
 #[test]
 fn test_sniff_windows_bmp() {
-  let matcher = ByteMatcher::windows_bmp();
+  let matcher = ByteMatcher::image_bmp();
 
   let p = Path::new("./tests/content/parsable_mime/image/bmp/test.bmp");
   let mut file = File::open(&p);
@@ -190,14 +259,22 @@ impl MIMEClassifier
      //     and not hardcoded
      
      let mut ret = MIMEClassifier{byte_matchers:Vec::new()};
-     ret.byte_matchers.push(box ByteMatcher::windows_icon());
-     ret.byte_matchers.push(box ByteMatcher::windows_cursor());
-     ret.byte_matchers.push(box ByteMatcher::windows_bmp());
-     ret.byte_matchers.push(box ByteMatcher::gif89a());
-     ret.byte_matchers.push(box ByteMatcher::gif87a());
-     ret.byte_matchers.push(box ByteMatcher::webp());
-     ret.byte_matchers.push(box ByteMatcher::png());
-     ret.byte_matchers.push(box ByteMatcher::jpeg());
+     ret.byte_matchers.push(box ByteMatcher::image_x_icon());
+     ret.byte_matchers.push(box ByteMatcher::image_x_icon_cursor());
+     ret.byte_matchers.push(box ByteMatcher::image_bmp());
+     ret.byte_matchers.push(box ByteMatcher::image_gif89a());
+     ret.byte_matchers.push(box ByteMatcher::image_gif87a());
+     ret.byte_matchers.push(box ByteMatcher::image_webp());
+     ret.byte_matchers.push(box ByteMatcher::image_png());
+     ret.byte_matchers.push(box ByteMatcher::image_jpeg());
+     ret.byte_matchers.push(box ByteMatcher::video_webm());
+     ret.byte_matchers.push(box ByteMatcher::audio_basic());
+     ret.byte_matchers.push(box ByteMatcher::audio_aiff());
+     ret.byte_matchers.push(box ByteMatcher::audio_mpeg());
+     ret.byte_matchers.push(box ByteMatcher::application_ogg());
+     ret.byte_matchers.push(box ByteMatcher::audio_midi());
+     ret.byte_matchers.push(box ByteMatcher::video_avi());
+     ret.byte_matchers.push(box ByteMatcher::audio_wave());
      return ret;
      
   }
@@ -235,30 +312,23 @@ fn test_classify_parsable_content_types() {
             let subtype = ss[1].to_string();
             let type_ = ss[0].to_string();
 
-            match rel_path.dirname_str() {
-              Some(type_string)=> {
-              let mut file = File::open(&p);
-              let read_result = file.read_to_end();
-              match read_result {
-                Ok(data) => {
-                  match classifier.classify(&data)
-                  {
-                    Some(mime)=>{ 
-                      let parsed_type=mime.ref0().clone();
-                      let parsed_subtp=mime.ref1().clone();
-
-                      if (parsed_type!=type_)||(parsed_subtp!=subtype) {
-                        panic!("File {} parsed incorrectly should be {}/{}, parsed as {}/{}",rel_path.as_str(),type_,subtype,parsed_type,parsed_subtp);
-                      }
+            let mut file = File::open(&p);
+            let read_result = file.read_to_end();
+            match read_result {
+              Ok(data) => {
+                match classifier.classify(&data)
+                {
+                  Some(mime)=>{ 
+                    let parsed_type=mime.ref0().clone();
+                    let parsed_subtp=mime.ref1().clone();
+                     if (parsed_type!=type_)||(parsed_subtp!=subtype) {
+                      panic!("File {} parsed incorrectly should be {}/{}, parsed as {}/{}",rel_path.as_str(),type_,subtype,parsed_type,parsed_subtp);
                     }
-                    None=>{panic!("No classification found for {}",rel_path.as_str());}
                   }
+                  None=>{panic!("No classification found for {}",rel_path.as_str());}
                 }
-                Err(e) => {panic!("Couldn't read from file {} with error {}",p.as_str(),e);}
               }
-                
-              }
-              None=>{panic!("Couldn't convert to string");}
+              Err(e) => {panic!("Couldn't read from file {} with error {}",p.as_str(),e);}
             }
           }
           None=>{panic!("Couldn't conver to relative path");}
