@@ -566,7 +566,7 @@ impl ByteMatcher {
   fn application_zip()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x50u8,0x4Bu8,0x03u8,0x04u8],
-      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+     mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
       content_type:("application".to_string(),"zip".to_string()),
       leading_ignore:vec![]
     }
@@ -576,6 +576,41 @@ impl ByteMatcher {
       pattern:vec![0x52u8,0x61u8,0x72u8,0x20u8,0x1Au8,0x07u8,0x00u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
       content_type:("application".to_string(),"x-rar-compressed".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn application_postscript()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x25u8,0x21u8,0x50u8,0x53u8,0x2Du8,0x41u8,0x64u8,0x6Fu8,
+                   0x62u8,0x65u8,0x2Du8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,
+                   0xFFu8,0xFFu8,0xFFu8],
+      content_type:("application".to_string(),"postscript".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn text_plain_utf_16be_bom()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0xFFu8,0xFFu8,0x00u8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0x00u8,0x00u8],
+      content_type:("test".to_string(),"plain".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+  fn text_plain_utf_16le_bom()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0xFFu8,0xFEu8,0x00u8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0x00u8,0x00u8],
+      content_type:("text".to_string(),"plain".to_string()),
+      leading_ignore:vec![]
+    }
+  }
+
+  fn text_plain_utf_8_bom()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0xEFu8,0xBBu8,0xBFu8,0x00u8],
+      mask:   vec![0xFFu8,0xFFu8,0xFFu8,0x00u8],
+      content_type:("text".to_string(),"plain".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -648,14 +683,58 @@ fn test_sniff_windows_bmp() {
   }
 }
 
-struct MIMEClassifier
-{
+struct Mp4Matcher;
+
+impl Mp4Matcher {
+  fn matches(&self,data:&Vec<u8>)->bool {
+    if data.len() < 12 {return false;}
+    let box_size = ((data[0] as u32)<<3 | (data[1] as u32)<<2 |(data[2] as u32)<<1|(data[3] as u32)) as uint;
+    if (data.len()<box_size) || (box_size%4!=0) {return false;}
+    //TODO replace with iterators
+    let ftyp = [0x66,0x74,0x79,0x70];
+    let mp4 =  [0x6D,0x70,0x34];
+
+    for i in range(4u,8u) {
+      if data[i]!=ftyp[i-4] {
+        return false;
+      }
+    }
+    let mut all_match = true;
+    for i in range(8u,11u) {
+      if data[i]!=mp4[i-8u] {all_match = false; break;}
+    }
+    if all_match {return true;}
+    let mut bytes_read = 16u;
+
+    while bytes_read < box_size
+    {
+      all_match = true;
+      for i in range(0u,3u) {
+        if mp4[i]!=data[i+bytes_read] {all_match=false; break;}
+      }
+      if all_match {return true;}
+      bytes_read=bytes_read+4;
+    }
+    return false;
+  }
+
+}
+impl MIMEChecker for Mp4Matcher {
+  fn classify(&self, data:&Vec<u8>)->Option<(String,String)> {
+   return if self.matches(data) {
+      Some(("video".to_string(), "mp4".to_string())) 
+    } else {
+      None
+    };
+  }
+}
+
+struct MIMEClassifier {
   //TODO Replace with boxed trait
   byte_matchers: Vec<Box<MIMEChecker+Send>>,
 }
 
-impl MIMEClassifier
-{
+impl MIMEClassifier {
   fn new()->MIMEClassifier {
      //TODO These should be configured from a settings file
      //     and not hardcoded
@@ -685,6 +764,10 @@ impl MIMEClassifier
      ret.byte_matchers.push(box ByteMatcher::application_x_gzip());
      ret.byte_matchers.push(box ByteMatcher::application_zip());
      ret.byte_matchers.push(box ByteMatcher::application_x_rar_compressed());
+     ret.byte_matchers.push(box ByteMatcher::text_plain_utf_8_bom());
+     ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16le_bom());
+     ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16be_bom());
+     ret.byte_matchers.push(box ByteMatcher::application_postscript());
 
      return ret;
 
@@ -701,7 +784,24 @@ impl MIMEClassifier
     }
     return None;
   }
+}
 
+#[test]
+fn test_sniff_mp4() {
+  let matcher = Mp4Matcher;
+
+  let p = Path::new("./tests/content/parsable_mime/video/mp4/test.mp4");
+  let mut file = File::open(&p);
+  let read_result = file.read_to_end();
+  match read_result {
+    Ok(data) => {
+      println!("Data Length {:u}",data.len());
+      if !matcher.matches(&data) {
+        panic!("Didn't read mime type")
+      }
+    },
+    Err(e) => panic!("Couldn't read from file with error {}",e)
+  }
 }
 
 #[test]
