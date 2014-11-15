@@ -1,16 +1,17 @@
 use std::io::File;
 use std::io::fs;
 use std::io::fs::PathExtensions;
+use std::str;
 
 trait MIMEChecker {
-  fn classify(&self, data:&Vec<u8>)->Option<String>;
+  fn classify(&self, data:&Vec<u8>)->Option<(String,String)>;
 }
 
 struct ByteMatcher {
   pattern: Vec<u8>,
   mask: Vec<u8>,
   leading_ignore: Vec<u8>,
-  mime_type: String,
+  content_type: (String,String)
 }
 
 impl ByteMatcher {
@@ -45,14 +46,14 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x01u8,0x00u8],
       mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/x-icon".to_string(),
+      content_type:("image".to_string(),"x-icon".to_string()),
       leading_ignore:vec![]}
   }
   fn windows_cursor()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x02u8,0x00u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/x-icon".to_string(),
+      content_type:("image".to_string(),"x-icon".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -60,7 +61,7 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x42u8,0x4Du8],
       mask:   vec![0xFFu8,0xFFu8],
-      mime_type:"image/bmp".to_string(),
+      content_type:("image".to_string(),"bmp".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -68,7 +69,7 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x39u8,0x61u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/gif".to_string(),
+      content_type:("image".to_string(),"gif".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -76,7 +77,7 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x47u8,0x49u8,0x46u8,0x38u8,0x37u8,0x61u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/gif".to_string(),
+      content_type:("image".to_string(),"gif".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -86,7 +87,7 @@ impl ByteMatcher {
                    0x57u8,0x45u8,0x42u8,0x50u8,0x56u8,0x50u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0x00u8,0x00u8,0x00u8,0x00u8,
                    0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/webp".to_string(),
+      content_type:("image".to_string(),"webp".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -95,7 +96,7 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x89u8,0x50u8,0x4Eu8,0x47u8,0x0Du8,0x0Au8,0x1Au8,0x0Au8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/png".to_string(),
+      content_type:("image".to_string(),"png".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -103,17 +104,17 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0xFFu8,0xD8u8,0xFFu8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8],
-      mime_type:"image/jpeg".to_string(),
+      content_type:("image".to_string(),"jpeg".to_string()),
       leading_ignore:vec![]
     }
   }
 }
 
 impl MIMEChecker for ByteMatcher {
-  fn classify(&self, data:&Vec<u8>)->Option<String>
+  fn classify(&self, data:&Vec<u8>)->Option<(String,String)>
   {
    return if self.matches(data) {
-      Some(self.mime_type.clone()) 
+      Some(self.content_type.clone()) 
     } else {
       None
     };
@@ -201,12 +202,12 @@ impl MIMEClassifier
      
   }
   
-  fn classify(&self,data:&Vec<u8>)->Option<String> {
+  fn classify(&self,data:&Vec<u8>)->Option<(String,String)> {
     for matcher in self.byte_matchers.iter()
     {
       match matcher.classify(data)
       {
-        Some(mime)=>{ return Some(mime.clone());}
+        Some(mime)=>{ return Some(mime);}
         None=>{}
       }
     }
@@ -216,7 +217,7 @@ impl MIMEClassifier
 }
 
 #[test]
-fn test_classify_parsable_mime_types() {
+fn test_classify_parsable_content_types() {
   let classifier = MIMEClassifier::new();
   let mimes_path= Path::new("./tests/content/parsable_mime/");
 
@@ -226,6 +227,14 @@ fn test_classify_parsable_mime_types() {
       if p.is_file() {
         match p.path_relative_from(&mimes_path) {
           Some(rel_path)=>{
+            let dir_str = match rel_path.dirname_str() {
+               Some(nm) => nm.to_string(),
+               None=>"".to_string()};
+            let ss: Vec<&str> = dir_str.as_slice().split('/').collect();
+
+            let subtype = ss[1].to_string();
+            let type_ = ss[0].to_string();
+
             match rel_path.dirname_str() {
               Some(type_string)=> {
               let mut file = File::open(&p);
@@ -234,9 +243,12 @@ fn test_classify_parsable_mime_types() {
                 Ok(data) => {
                   match classifier.classify(&data)
                   {
-                    Some(x)=>{ 
-                      if x!=type_string.to_string() {
-                        panic!("File {} parsed incorrectly should be {}, parsed as {}",rel_path.as_str(),x,type_string);
+                    Some(mime)=>{ 
+                      let parsed_type=mime.ref0().clone();
+                      let parsed_subtp=mime.ref1().clone();
+
+                      if (parsed_type!=type_)||(parsed_subtp!=subtype) {
+                        panic!("File {} parsed incorrectly should be {}/{}, parsed as {}/{}",rel_path.as_str(),type_,subtype,parsed_type,parsed_subtp);
                       }
                     }
                     None=>{panic!("No classification found for {}",rel_path.as_str());}
