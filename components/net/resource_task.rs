@@ -9,6 +9,7 @@ use data_loader;
 use file_loader;
 use http_loader;
 use sniffer_task;
+use sniffer_task::{SnifferTask};
 
 use std::comm::{channel, Receiver, Sender};
 use http::headers::content_type::MediaType;
@@ -200,10 +201,11 @@ impl ResourceManager {
 
 impl ResourceManager {
     fn start(&self) {
+        let sniffer_task = sniffer_task::new_sniffer_task();
         loop {
             match self.from_client.recv() {
               Load(load_data, start_chan) => {
-                self.load(load_data, start_chan)
+                self.load(load_data, start_chan, sniffer_task.clone())
               }
               Exit => {
                 break
@@ -212,16 +214,10 @@ impl ResourceManager {
         }
     }
 
-    fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
+    fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>, sniffer_task: SnifferTask) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
         load_data.next_rx = Some(start_chan.clone());
-
-        // Create new communication channel, create new sniffer task,
-        // send all the data to the new sniffer task with the send
-        // end of the pipe, receive all the data.
-
-        let sniffer_task = sniffer_task::new_sniffer_task();
 
         let loader = match load_data.url.scheme.as_slice() {
             "file" => file_loader::factory,
