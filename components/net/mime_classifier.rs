@@ -138,7 +138,7 @@ fn test_sniff_windows_bmp() {
 struct MIMEClassifier
 {
   //TODO Replace with boxed trait
-  byte_matchers: Vec<ByteMatcher>,//TODO should change to Box<MIMEChecker+Send>, but I need to figure out lifetimes first
+  byte_matchers: Vec<Box<MIMEChecker+Send>>,
 }
 
 impl MIMEClassifier
@@ -146,12 +146,14 @@ impl MIMEClassifier
   fn new()->MIMEClassifier {
      //TODO These should be configured from a settings file
      //     and not hardcoded
-     let mut vec = Vec::new();
-     vec.push(ByteMatcher::windows_icon());
-     vec.push(ByteMatcher::windows_cursor());
-     vec.push(ByteMatcher::windows_bmp());
      
-     return MIMEClassifier{byte_matchers:vec};
+     let mut ret = MIMEClassifier{byte_matchers:Vec::new()};
+     ret.byte_matchers.push(box ByteMatcher::windows_icon());
+     ret.byte_matchers.push(box ByteMatcher::windows_cursor());
+     ret.byte_matchers.push(box ByteMatcher::windows_bmp());
+     
+     return ret;
+     
   }
   
   fn classify(&self,data:&Vec<u8>)->Option<String> {
