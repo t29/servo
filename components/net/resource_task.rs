@@ -4,9 +4,9 @@
 
 //! A task that takes a URL and streams back the binary data.
 
-use about_loader;
-use data_loader;
-use file_loader;
+//use about_loader;
+// use data_loader;
+// use file_loader;
 use http_loader;
 use sniffer_task;
 
@@ -34,7 +34,8 @@ pub struct LoadData {
     pub method: Method,
     pub headers: RequestHeaderCollection,
     pub data: Option<Vec<u8>>,
-    pub cors: Option<ResourceCORSData>
+    pub cors: Option<ResourceCORSData>,
+    pub next_rx: Option<Sender<LoadResponse>>
 }
 
 impl LoadData {
@@ -44,7 +45,8 @@ impl LoadData {
             method: Get,
             headers: RequestHeaderCollection::new(),
             data: None,
-            cors: None
+            cors: None,
+            next_rx: None
         }
     }
 }
@@ -117,6 +119,11 @@ pub struct LoadResponse {
     pub progress_port: Receiver<ProgressMsg>,
 }
 
+pub struct TargetedLoadResponse {
+  pub load_response: LoadResponse,
+  pub sender: Sender<LoadResponse>,
+}
+
 /// Messages sent in response to a `Load` message
 #[deriving(PartialEq,Show)]
 pub enum ProgressMsg {
@@ -127,16 +134,19 @@ pub enum ProgressMsg {
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending(start_chan: Sender<LoadResponse>, metadata: Metadata) -> Sender<ProgressMsg> {
-    start_sending_opt(start_chan, metadata).ok().unwrap()
+pub fn start_sending(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Sender<ProgressMsg> {
+    start_sending_opt(start_chan, next_rx, metadata).ok().unwrap()
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending_opt(start_chan: Sender<LoadResponse>, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
+pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
     let (progress_chan, progress_port) = channel();
-    let result = start_chan.send_opt(LoadResponse {
+    let result = start_chan.send_opt(TargetedLoadResponse {
+      load_response: LoadResponse {
         metadata:      metadata,
         progress_port: progress_port,
+      },
+      sender: next_rx
     });
     match result {
         Ok(_) => Ok(progress_chan),
@@ -205,21 +215,22 @@ impl ResourceManager {
     fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
+        load_data.next_rx = Some(start_chan.clone());
 
         // Create new communication channel, create new sniffer task,
         // send all the data to the new sniffer task with the send
         // end of the pipe, receive all the data.
 
-        let sniffer_task = sniffer_task::new_sniffer_task(start_chan.clone());
+        let sniffer_task = sniffer_task::new_sniffer_task();
 
         let loader = match load_data.url.scheme.as_slice() {
-            "file" => file_loader::factory,
+            // "file" => file_loader::factory,
             "http" | "https" => http_loader::factory,
-            "data" => data_loader::factory,
-            "about" => about_loader::factory,
+            // "data" => data_loader::factory,
+            // "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(start_chan, Metadata::default(load_data.url))
+                start_sending(sniffer_task, start_chan.clone(), Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }

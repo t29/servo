@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use resource_task::{LoadResponse, Metadata, Done, LoadData, start_sending};
+use resource_task::{LoadResponse, TargetedLoadResponse, Metadata, Done, LoadData, start_sending};
 use file_loader;
 
 use std::io::fs::PathExtensions;
