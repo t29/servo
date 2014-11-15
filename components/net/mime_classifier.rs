@@ -1,4 +1,6 @@
 use std::io::File;
+use std::io::fs;
+use std::io::fs::PathExtensions;
 
 trait MIMEChecker {
   fn classify(&self, data:&Vec<u8>)->Option<String>;
@@ -40,12 +42,28 @@ impl ByteMatcher {
     return true;
   }
 //TODO These should probably be configured not hard coded
-  fn windows_icon_sniffer()->ByteMatcher {
+  fn windows_icon()->ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x00u8,0x00u8,0x01u8,0x00u8],
       mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
       MIME_type:"image/x-icon".to_string(),
       leading_ignore:vec![]}
+  }
+  fn windows_cursor()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x00u8,0x00u8,0x02u8,0x00u8],
+      mask:vec![0xFFu8,0xFFu8,0xFFu8,0xFFu8],
+      MIME_type:"image/x-icon".to_string(),
+      leading_ignore:vec![]
+    }
+  }
+  fn windows_bmp()->ByteMatcher {
+    return ByteMatcher{
+      pattern:vec![0x42u8,0x4Du8],
+      mask:vec![0xFFu8,0xFFu8],
+      MIME_type:"image/bmp".to_string(),
+      leading_ignore:vec![]
+    }
   }
 }
 
@@ -63,23 +81,59 @@ impl MIMEChecker for ByteMatcher {
 
 #[test]
 fn test_sniff_windows_icon() {
-  let matcher = ByteMatcher::windows_icon_sniffer();
+  let matcher = ByteMatcher::windows_icon();
 
-  let p = Path::new("./tests/content/test.ico");
+  let p = Path::new("./tests/content/parsable_mime/image/x-icon.ico");
   let mut file = File::open(&p);
   let read_result = file.read_to_end();
   match read_result {
     Ok(data) => {
       println!("Data Length {:u}",data.len());
       if !matcher.matches(&data) {
-        fail!("Didn't read mime type")
+        panic!("Didn't read mime type")
       }
     },
-    Err(e) => fail!("Couldn't read from file!")
+    Err(e) => panic!("Couldn't read from file!")
   }
 
 }
 
+#[test]
+fn test_sniff_windows_cursor() {
+  let matcher = ByteMatcher::windows_cursor();
+
+  let p = Path::new("./tests/content/parsable_mime/image/x-icon.cursor");
+  let mut file = File::open(&p);
+  let read_result = file.read_to_end();
+  match read_result {
+    Ok(data) => {
+      println!("Data Length {:u}",data.len());
+      if !matcher.matches(&data) {
+        panic!("Didn't read mime type")
+      }
+    },
+    Err(e) => panic!("Couldn't read from file!")
+  }
+}
+
+#[test]
+fn test_sniff_windows_bmp() {
+  let matcher = ByteMatcher::windows_bmp();
+
+  let p = Path::new("./tests/content/parsable_mime/image/bmp.bmp");
+  let mut file = File::open(&p);
+  let read_result = file.read_to_end();
+  match read_result {
+    Ok(data) => {
+      println!("Data Length {:u}",data.len());
+      if !matcher.matches(&data) {
+        panic!("Didn't read mime type")
+      }
+    },
+    Err(e) => panic!("Couldn't read from file!")
+  }
+
+}
 
 struct MIMEClassifier
 {
@@ -93,7 +147,10 @@ impl MIMEClassifier
      //TODO These should be configured from a settings file
      //     and not hardcoded
      let mut vec = Vec::new();
-     vec.push(ByteMatcher::windows_icon_sniffer());
+     vec.push(ByteMatcher::windows_icon());
+     vec.push(ByteMatcher::windows_cursor());
+     vec.push(ByteMatcher::windows_bmp());
+     
      return MIMEClassifier{byte_matchers:vec};
   }
   
@@ -112,25 +169,45 @@ impl MIMEClassifier
 }
 
 #[test]
-fn test_classify_windows_icon() {
+fn test_classify_parsable_mime_types() {
   let classifier = MIMEClassifier::new();
+  let mimes_path= Path::new("./tests/content/parsable_mime/");
 
-  let p = Path::new("./tests/content/test.ico");
-  let mut file = File::open(&p);
-  let read_result = file.read_to_end();
-  match read_result {
-    Ok(data) => {
-      
-      match classifier.classify(&data)
-      {
-        Some(x)=>{ if (x!="image/x-icon".to_string()) {
-          fail!("Windows Icon parsed incorrectly");
+  match fs::walk_dir(&mimes_path) {
+    Err(why) => panic!("! {}", why.kind),
+    Ok(mut paths) => for p in paths {
+      if p.is_file() {
+        match p.path_relative_from(&mimes_path) {
+          Some(rel_path)=>{
+            let mut path_type = rel_path.clone();
+            path_type.set_extension("");
+            match path_type.as_str() {
+              Some(type_string)=> {
+              let mut file = File::open(&p);
+              let read_result = file.read_to_end();
+              match read_result {
+                Ok(data) => {
+                  match classifier.classify(&data)
+                  {
+                    Some(x)=>{ 
+                      if (x!=type_string.to_string()) {
+                        panic!("Windows Icon parsed incorrectly");
+                      }
+                    }
+                    None=>{panic!("No classification found for {}",rel_path.as_str());}
+                  }
+                }
+                Err(e) => {panic!("Couldn't read from file {}",p.as_str());}
+              }
+                
+              }
+              None=>{panic!("Couldn't convert to string");}
+            }
           }
+          None=>{panic!("Couldn't conver to relative path");}
         }
-        None=>{fail!("No classification found");}
       }
     }
-    Err(e) => {fail!("Couldn't read from file!");}
   }
 }
 
