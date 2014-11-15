@@ -83,7 +83,7 @@ impl MIMEChecker for ByteMatcher {
 fn test_sniff_windows_icon() {
   let matcher = ByteMatcher::windows_icon();
 
-  let p = Path::new("./tests/content/parsable_mime/image/x-icon.ico");
+  let p = Path::new("./tests/content/parsable_mime/image/x-icon/test.ico");
   let mut file = File::open(&p);
   let read_result = file.read_to_end();
   match read_result {
@@ -102,7 +102,7 @@ fn test_sniff_windows_icon() {
 fn test_sniff_windows_cursor() {
   let matcher = ByteMatcher::windows_cursor();
 
-  let p = Path::new("./tests/content/parsable_mime/image/x-icon.cursor");
+  let p = Path::new("./tests/content/parsable_mime/image/x-icon/test_cursor.ico");
   let mut file = File::open(&p);
   let read_result = file.read_to_end();
   match read_result {
@@ -120,7 +120,7 @@ fn test_sniff_windows_cursor() {
 fn test_sniff_windows_bmp() {
   let matcher = ByteMatcher::windows_bmp();
 
-  let p = Path::new("./tests/content/parsable_mime/image/bmp.bmp");
+  let p = Path::new("./tests/content/parsable_mime/image/bmp/test.bmp");
   let mut file = File::open(&p);
   let read_result = file.read_to_end();
   match read_result {
@@ -181,9 +181,7 @@ fn test_classify_parsable_mime_types() {
       if p.is_file() {
         match p.path_relative_from(&mimes_path) {
           Some(rel_path)=>{
-            let mut path_type = rel_path.clone();
-            path_type.set_extension("");
-            match path_type.as_str() {
+            match rel_path.dirname_str() {
               Some(type_string)=> {
               let mut file = File::open(&p);
               let read_result = file.read_to_end();
@@ -193,7 +191,7 @@ fn test_classify_parsable_mime_types() {
                   {
                     Some(x)=>{ 
                       if (x!=type_string.to_string()) {
-                        panic!("Windows Icon parsed incorrectly");
+                        panic!("File {} parsed incorrectly should be {}, parsed as {}",rel_path.as_str(),x,type_string);
                       }
                     }
                     None=>{panic!("No classification found for {}",rel_path.as_str());}
