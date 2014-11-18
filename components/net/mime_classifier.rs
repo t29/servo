@@ -558,7 +558,7 @@ impl ByteMatcher {
     return ByteMatcher{
       pattern:vec![0x1Fu8,0x8Bu8,0x08u8],
       mask:   vec![0xFFu8,0xFFu8,0xFFu8],
-      content_type:("application".to_string(),"x-gizp".to_string()),
+      content_type:("application".to_string(),"x-gzip".to_string()),
       leading_ignore:vec![]
     }
   }
@@ -665,7 +665,7 @@ impl Mp4Matcher {
 impl MIMEChecker for Mp4Matcher {
   fn classify(&self, data:&Vec<u8>)->Option<(String,String)> {
    return if self.matches(data) {
-      Some(("video".to_string(), "mp4".to_string())) 
+      Some(("video".to_string(), "mp4".to_string()))
     } else {
       None
     };
@@ -823,126 +823,126 @@ fn test_classification(file:&str,type_string:&str,subtype_string:&str){
   x.push(file);
   test_classification_full(&x,type_string,subtype_string);
 }
-  
+
 #[test]
 fn test_classification_x_icon() { test_classification("test.ico","image","x-icon"); }
 
 #[test]
 fn test_classification_x_icon_cursor() {
- test_classification("test_cursor.ico","image","x-icon"); 
+ test_classification("test_cursor.ico","image","x-icon");
 }
 
 #[test]
 fn test_classification_bmp() { test_classification("test.bmp","image","bmp"); }
 
 #[test]
-fn test_classification_gif87a() { 
-  test_classification("test87a.gif","image","gif"); 
+fn test_classification_gif87a() {
+  test_classification("test87a.gif","image","gif");
 }
 
 #[test]
-fn test_classification_gif89a() { 
-  test_classification("test89a.gif","image","gif"); 
+fn test_classification_gif89a() {
+  test_classification("test89a.gif","image","gif");
 }
 
 #[test]
-fn test_classification_webp() { 
-  test_classification("test.webp","image","webp"); 
+fn test_classification_webp() {
+  test_classification("test.webp","image","webp");
 }
 
 #[test]
-fn test_classification_png() { 
-  test_classification("test.png","image","png"); 
+fn test_classification_png() {
+  test_classification("test.png","image","png");
 }
 
 #[test]
-fn test_classification_jpg() { 
-  test_classification("test.jpg","image","jpeg"); 
+fn test_classification_jpg() {
+  test_classification("test.jpg","image","jpeg");
 }
 
 #[test]
-fn test_classification_webm() { 
-  test_classification("test.webm","video","webm"); 
+fn test_classification_webm() {
+  test_classification("test.webm","video","webm");
 }
 
 #[test]
-fn test_classification_mp4() { 
-  test_classification("test.mp4","video","mp4"); 
+fn test_classification_mp4() {
+  test_classification("test.mp4","video","mp4");
 }
 
 #[test]
-fn test_classification_avi() { 
-  test_classification("test.avi","video","avi"); 
+fn test_classification_avi() {
+  test_classification("test.avi","video","avi");
 }
 
 #[test]
-fn test_classification_basic() { 
-  test_classification("test.au","audio","basic"); 
+fn test_classification_basic() {
+  test_classification("test.au","audio","basic");
 }
 
 #[test]
-fn test_classification_aiff() { 
-  test_classification("test.aif","audio","aiff"); 
+fn test_classification_aiff() {
+  test_classification("test.aif","audio","aiff");
 }
 
 #[test]
-fn test_classification_mpeg() { 
-  test_classification("test.mp3","audio","mpeg"); 
+fn test_classification_mpeg() {
+  test_classification("test.mp3","audio","mpeg");
 }
 
 #[test]
-fn test_classification_midi() { 
-  test_classification("test.mid","audio","midi"); 
+fn test_classification_midi() {
+  test_classification("test.mid","audio","midi");
 }
 
 #[test]
-fn test_classification_wave() { 
-  test_classification("test.wav","audio","wave"); 
+fn test_classification_wave() {
+  test_classification("test.wav","audio","wave");
 }
 
 #[test]
-fn test_classification_ogg() { 
-  test_classification("small.ogg","application","ogg"); 
+fn test_classification_ogg() {
+  test_classification("small.ogg","application","ogg");
 }
 
 #[test]
-fn test_classification_vsn_ms_fontobject() { 
-  test_classification("vdn.ms-fontobject","application","vnd.ms-fontobject"); 
+fn test_classification_vsn_ms_fontobject() {
+  test_classification("vnd.ms-fontobject","application","vnd.ms-fontobject");
 }
 
 #[test]
-fn test_true_type() { 
+fn test_true_type() {
   test_classification_full(&Path::new("unknown/true_type.ttf"),"(TrueType)","");
 }
 
 #[test]
-fn test_open_type() { 
-  test_classification_full(&Path::new("unknown/open_type"),"(OpenType)",""); 
+fn test_open_type() {
+  test_classification_full(&Path::new("unknown/open_type"),"(OpenType)","");
 }
 
 #[test]
-fn test_classification_true_type_collection() { 
-  test_classification_full(&Path::new("uknown/true_type_collection"),"(True Type Collection)",""); 
+fn test_classification_true_type_collection() {
+  test_classification_full(&Path::new("unknown/true_type_collection.ttc"),"(TrueType Collection)","");
 }
 
 #[test]
-fn test_classification_woff() { 
-  test_classification("test.wof","application","font-woff"); 
+fn test_classification_woff() {
+  test_classification("test.wof","application","font-woff");
 }
 
 #[test]
-fn test_classification_gzip() { 
-  test_classification("test.targz","application","gzip"); 
+fn test_classification_gzip() {
+  test_classification("test.gz","application","x-gzip");
 }
 
 #[test]
-fn test_classification_zip() { 
-  test_classification("test.zip","application","zip"); 
+fn test_classification_zip() {
+  test_classification("test.zip","application","zip");
 }
 
 #[test]
-fn test_classification_rar() { 
-  test_classification("test.rar","application","x-rar-compressed"); 
+fn test_classification_rar() {
+  test_classification("test.rar","application","x-rar-compressed");
 }
 
 #[test]
