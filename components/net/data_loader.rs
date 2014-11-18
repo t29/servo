@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use resource_task::{Done, Payload, Metadata, LoadData, LoadResponse, start_sending};
+use resource_task::{Done, Payload, Metadata, LoadData, TargetedLoadResponse, start_sending};
 
 use serialize::base64::FromBase64;
 
@@ -11,7 +11,7 @@ use http::headers::content_type::MediaType;
 use url::{percent_decode, NonRelativeSchemeData};
 
 
-pub fn factory(load_data: LoadData, start_chan: Sender<LoadResponse>) {
+pub fn factory(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     // NB: we don't spawn a new task.
     // Hypothesis: data URLs are too small for parallel base64 etc. to be worth it.
     // Should be tested at some point.
@@ -19,7 +19,7 @@ pub fn factory(load_data: LoadData, start_chan: Sender<LoadResponse>) {
     load(load_data, start_chan)
 }
 
-fn load(load_data: LoadData, start_chan: Sender<LoadResponse>) {
+fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     let url = load_data.url;
     assert!("data" == url.scheme.as_slice());
 
@@ -39,7 +39,7 @@ fn load(load_data: LoadData, start_chan: Sender<LoadResponse>) {
     }
     let parts: Vec<&str> = scheme_data.as_slice().splitn(1, ',').collect();
     if parts.len() != 2 {
-        start_sending(start_chan, metadata).send(Done(Err("invalid data uri".to_string())));
+        start_sending(start_chan, load_data.next_rx.unwrap(), metadata).send(Done(Err("invalid data uri".to_string())));
         return;
     }
 
@@ -57,7 +57,7 @@ fn load(load_data: LoadData, start_chan: Sender<LoadResponse>) {
     let content_type: Option<MediaType> = from_stream_with_str(ct_str);
     metadata.set_content_type(&content_type);
 
-    let progress_chan = start_sending(start_chan, metadata);
+    let progress_chan = start_sending(start_chan, load_data.next_rx.unwrap(), metadata);
     let bytes = percent_decode(parts[1].as_bytes());
 
     if is_base64 {

@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 
-use eutil::fptr_is_null;
+use eutil::slice_to_str;
 use libc::{size_t, c_int, c_ushort,c_void};
 use libc::types::os::arch::c95::wchar_t;
 use mem::{new0,newarray0,delete,deletearray};
@@ -11,7 +11,6 @@ use std::mem;
 use std::ptr;
 use std::slice;
 use std::string;
-use std::str;
 use types::{cef_string_utf16_t, cef_string_utf8_t, cef_string_wide_t};
 use types::{cef_string_userfree_utf16_t, cef_string_userfree_utf8_t, cef_string_userfree_wide_t};
 
@@ -53,10 +52,7 @@ pub extern "C" fn cef_string_userfree_utf16_free(cs: *mut cef_string_userfree_ut
 #[no_mangle]
 pub extern "C" fn cef_string_utf8_clear(cs: *mut cef_string_utf8_t) {
     unsafe {
-        if !fptr_is_null(mem::transmute((*cs).dtor)) {
-            let dtor = (*cs).dtor;
-            dtor((*cs).str);
-        }
+        (*cs).dtor.map(|dtor| dtor((*cs).str));
         (*cs).length = 0;
         (*cs).str = 0 as *mut u8;
         (*cs).dtor = mem::transmute(0 as *const u8);
@@ -82,7 +78,7 @@ pub extern "C" fn cef_string_utf8_set(src: *const u8, src_len: size_t, output: *
 
              ptr::copy_memory((*output).str, src, src_len as uint);
              (*output).length = src_len;
-             (*output).dtor = string_utf8_dtor;
+             (*output).dtor = Some(string_utf8_dtor);
            }
        } else {
          (*output).str = mem::transmute(src);
@@ -94,19 +90,27 @@ pub extern "C" fn cef_string_utf8_set(src: *const u8, src_len: size_t, output: *
 }
 
 #[no_mangle]
-pub extern "C" fn cef_string_utf8_to_utf16(src: *const u8, src_len: size_t, output: *mut cef_string_utf16_t) -> c_int {
+pub extern "C" fn cef_string_utf8_cmp(a: *const cef_string_utf8_t, b: *const cef_string_utf8_t) -> c_int {
     unsafe {
-       slice::raw::buf_as_slice(src, src_len as uint, |result| {
-            match str::from_utf8(result) {
-                 Some(enc) => {
-                      let conv = enc.utf16_units().collect::<Vec<u16>>();
-                      cef_string_utf16_set(conv.as_ptr(), conv.len() as size_t, output, 1);
-                      1
-                 },
-                 None => 0
-            }
+       slice::raw::buf_as_slice((*a).str as *const u8, (*a).length as uint, |astr:&[u8]| {
+            slice::raw::buf_as_slice((*b).str as *const u8, (*b).length as uint, |bstr:&[u8]| {
+                  match astr.cmp(bstr) {
+                       Less => -1,
+                       Equal => 0,
+                       Greater => 1
+                  }
+            })
        })
     }
+}
+
+#[no_mangle]
+pub extern "C" fn cef_string_utf8_to_utf16(src: *const u8, src_len: size_t, output: *mut cef_string_utf16_t) -> c_int {
+    slice_to_str(src, src_len as uint, |result| {
+        let conv = result.utf16_units().collect::<Vec<u16>>();
+        cef_string_utf16_set(conv.as_ptr(), conv.len() as size_t, output, 1);
+        1
+    })
 }
 
 #[no_mangle]
@@ -127,10 +131,7 @@ pub extern "C" fn cef_string_utf16_to_utf8(src: *const u16, src_len: size_t, out
 #[no_mangle]
 pub extern "C" fn cef_string_utf16_clear(cs: *mut cef_string_utf16_t) {
     unsafe {
-        if !fptr_is_null(mem::transmute((*cs).dtor)) {
-            let dtor = (*cs).dtor;
-            dtor((*cs).str);
-        }
+        (*cs).dtor.map(|dtor| dtor((*cs).str));
         (*cs).length = 0;
         (*cs).str = 0 as *mut c_ushort;
         (*cs).dtor = mem::transmute(0 as *const u8);
@@ -156,7 +157,7 @@ pub extern "C" fn cef_string_utf16_set(src: *const c_ushort, src_len: size_t, ou
 
              ptr::copy_memory((*output).str, src, src_len as uint);
              (*output).length = src_len;
-             (*output).dtor = string_utf16_dtor;
+             (*output).dtor = Some(string_utf16_dtor);
            }
        } else {
          (*output).str = mem::transmute(src);
@@ -185,10 +186,7 @@ pub extern "C" fn cef_string_utf16_cmp(a: *const cef_string_utf16_t, b: *const c
 #[no_mangle]
 pub extern "C" fn cef_string_wide_clear(cs: *mut cef_string_wide_t) {
     unsafe {
-        if !fptr_is_null(mem::transmute((*cs).dtor)) {
-            let dtor = (*cs).dtor;
-            dtor((*cs).str);
-        }
+        (*cs).dtor.map(|dtor| dtor((*cs).str));
         (*cs).length = 0;
         (*cs).str = 0 as *mut wchar_t;
         (*cs).dtor = mem::transmute(0 as *const u8);
@@ -214,7 +212,7 @@ pub extern "C" fn cef_string_wide_set(src: *const wchar_t, src_len: size_t, outp
 
              ptr::copy_memory((*output).str, src, src_len as uint);
              (*output).length = src_len;
-             (*output).dtor = string_wide_dtor;
+             (*output).dtor = Some(string_wide_dtor);
            }
        } else {
          (*output).str = mem::transmute(src);

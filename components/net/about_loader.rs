@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use resource_task::{LoadResponse, Metadata, Done, LoadData, start_sending};
+use resource_task::{TargetedLoadResponse, Metadata, Done, LoadData, start_sending};
 use file_loader;
 
 use std::io::fs::PathExtensions;
@@ -11,10 +11,10 @@ use http::status::Ok as StatusOk;
 use servo_util::resource_files::resources_dir_path;
 
 
-pub fn factory(mut load_data: LoadData, start_chan: Sender<LoadResponse>) {
+pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     match load_data.url.non_relative_scheme_data().unwrap() {
         "blank" => {
-            let chan = start_sending(start_chan, Metadata {
+            let chan = start_sending(start_chan, load_data.next_rx.unwrap(), Metadata {
                 final_url: load_data.url,
                 content_type: Some(("text".to_string(), "html".to_string())),
                 charset: Some("utf-8".to_string()),
@@ -32,7 +32,7 @@ pub fn factory(mut load_data: LoadData, start_chan: Sender<LoadResponse>) {
             load_data.url = Url::from_file_path(&path).unwrap();
         }
         _ => {
-            start_sending(start_chan, Metadata::default(load_data.url))
+            start_sending(start_chan, load_data.next_rx.unwrap(), Metadata::default(load_data.url))
                 .send(Done(Err("Unknown about: URL.".to_string())));
             return
         }
