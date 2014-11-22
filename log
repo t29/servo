@@ -1,0 +1,207 @@
+New python executable in _virtualenv/bin/python2.7
+Also creating executable in _virtualenv/bin/python
+Installing setuptools, pip...done.
+Running virtualenv with interpreter /usr/local/bin/python2
+Downloading/unpacking wptrunner==1.5
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/wptrunner/setup.py) egg_info for package wptrunner
+    
+Downloading/unpacking html5lib>=0.99 (from wptrunner==1.5)
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/html5lib/setup.py) egg_info for package html5lib
+    
+Downloading/unpacking mozinfo>=0.7 (from wptrunner==1.5)
+  Downloading mozinfo-0.7.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozinfo/setup.py) egg_info for package mozinfo
+    
+Downloading/unpacking mozlog>=1.8 (from wptrunner==1.5)
+  Downloading mozlog-2.7.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozlog/setup.py) egg_info for package mozlog
+    
+Downloading/unpacking mozrunner>=6.1 (from wptrunner==1.5)
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozrunner/setup.py) egg_info for package mozrunner
+    
+Downloading/unpacking six (from html5lib>=0.99->wptrunner==1.5)
+  Downloading six-1.8.0-py2.py3-none-any.whl
+Downloading/unpacking mozfile>=0.12 (from mozinfo>=0.7->wptrunner==1.5)
+  Downloading mozfile-1.1.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozfile/setup.py) egg_info for package mozfile
+    
+Downloading/unpacking blessings>=1.3 (from mozlog>=1.8->wptrunner==1.5)
+  Downloading blessings-1.6.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/blessings/setup.py) egg_info for package blessings
+    
+Downloading/unpacking mozcrash>=0.14 (from mozrunner>=6.1->wptrunner==1.5)
+  Downloading mozcrash-0.14.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozcrash/setup.py) egg_info for package mozcrash
+    
+Downloading/unpacking mozdevice>=0.37 (from mozrunner>=6.1->wptrunner==1.5)
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozdevice/setup.py) egg_info for package mozdevice
+    
+Downloading/unpacking mozprocess>=0.17 (from mozrunner>=6.1->wptrunner==1.5)
+  Downloading mozprocess-0.21.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozprocess/setup.py) egg_info for package mozprocess
+    
+Downloading/unpacking mozprofile>=0.18 (from mozrunner>=6.1->wptrunner==1.5)
+  Downloading mozprofile-0.22.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/mozprofile/setup.py) egg_info for package mozprofile
+    
+Downloading/unpacking moznetwork>=0.24 (from mozdevice>=0.37->mozrunner>=6.1->wptrunner==1.5)
+  Downloading moznetwork-0.24.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/moznetwork/setup.py) egg_info for package moznetwork
+    
+Downloading/unpacking manifestparser>=0.6 (from mozprofile>=0.18->mozrunner>=6.1->wptrunner==1.5)
+  Downloading manifestparser-0.8.tar.gz
+  Running setup.py (path:/Users/Vineela/Documents/servo/_virtualenv/build/manifestparser/setup.py) egg_info for package manifestparser
+    
+Installing collected packages: wptrunner, html5lib, mozinfo, mozlog, mozrunner, six, mozfile, blessings, mozcrash, mozdevice, mozprocess, mozprofile, moznetwork, manifestparser
+  Running setup.py install for wptrunner
+    
+    Installing wptupdate script to /Users/Vineela/Documents/servo/_virtualenv/bin
+    Installing wptrunner script to /Users/Vineela/Documents/servo/_virtualenv/bin
+    In order to use with one of the built-in browser products, you will need to
+    install the extra dependencies. These are provided as requirements_[name].txt in
+    the ../../requirements directory and can be installed using e.g.
+    
+    
+    pip install -r ../../requirements/requirements_firefox.txt
+    
+  Running setup.py install for html5lib
+    
+  Running setup.py install for mozinfo
+    
+    Installing mozinfo script to /Users/Vineela/Documents/servo/_virtualenv/bin
+  Running setup.py install for mozlog
+    
+    Installing structlog script to /Users/Vineela/Documents/servo/_virtualenv/bin
+  Running setup.py install for mozrunner
+    
+    Installing mozrunner script to /Users/Vineela/Documents/servo/_virtualenv/bin
+  Running setup.py install for mozfile
+    
+  Running setup.py install for blessings
+    
+  Running setup.py install for mozcrash
+    
+  Running setup.py install for mozdevice
+    
+    Installing sutini script to /Users/Vineela/Documents/servo/_virtualenv/bin
+    Installing dm script to /Users/Vineela/Documents/servo/_virtualenv/bin
+  Running setup.py install for mozprocess
+    
+  Running setup.py install for mozprofile
+    
+    Installing mozprofile script to /Users/Vineela/Documents/servo/_virtualenv/bin
+    Installing diff-profiles script to /Users/Vineela/Documents/servo/_virtualenv/bin
+    Installing view-profile script to /Users/Vineela/Documents/servo/_virtualenv/bin
+  Running setup.py install for moznetwork
+    
+  Running setup.py install for manifestparser
+    
+    Installing manifestparser script to /Users/Vineela/Documents/servo/_virtualenv/bin
+Successfully installed wptrunner html5lib mozinfo mozlog mozrunner six mozfile blessings mozcrash mozdevice mozprocess mozprofile moznetwork manifestparser
+Cleaning up...
+ 0:00.60 LOG: MainThread INFO Using 1 client processes
+ 0:00.60 LOG: MainThread INFO Placing required files in server environment.
+ 0:02.67 SUITE_START: MainThread 173
+ 0:02.67 LOG: MainThread INFO Running testharness tests
+ 0:02.67 TEST_START: MainThread /XMLHttpRequest/event-timeout.htm
+ 0:02.67 TEST_END: MainThread SKIP
+ 0:02.67 TEST_START: MainThread /XMLHttpRequest/responsetext-decoding.htm
+ 0:02.67 TEST_END: MainThread SKIP
+ 0:02.67 TEST_START: MainThread /XMLHttpRequest/status-async.htm
+ 0:02.67 TEST_END: MainThread SKIP
+ 0:02.67 TEST_START: MainThread /XMLHttpRequest/status-basic.htm
+ 0:02.67 TEST_END: MainThread SKIP
+ 0:02.67 TEST_START: MainThread /XMLHttpRequest/status-error.htm
+ 0:02.67 TEST_END: MainThread SKIP
+ 0:02.69 LOG: Thread-TestrunnerManager-1 INFO Starting runner
+ 0:02.70 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/FormData-append.html
+ 0:06.27 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:06.27 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-after-receive.htm
+ 0:06.91 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:06.91 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-after-send.htm
+ 0:07.28 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1185) Full command: /Users/Vineela/Documents/servo/target/servo --cpu --hard-fail http://localhost:8000/XMLHttpRequest/abort-after-send.htm
+(pid:1185) "task 'SnifferManager' panicked at 'sending on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:571"
+ 0:07.42 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1185) "task 'LayoutTask' panicked at 'receiving on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:835"
+ 0:07.42 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1185) "Pipeline failed in hard-fail mode.  Crashing!"
+ 0:21.92 CRASH: Thread-TestrunnerManager-1 pid:1175. Test:None. Minidump anaylsed:False. Signature:[/XMLHttpRequest/abort-after-send.htm]
+
+ 0:21.92 TEST_END: Thread-TestrunnerManager-1 CRASH, expected OK
+
+ 0:21.93 LOG: Thread-TestrunnerManager-1 WARNING u'runner_teardown' ()
+ 0:21.93 LOG: Thread-TestrunnerManager-1 INFO Starting runner
+ 0:21.94 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-after-stop.htm
+ 0:22.48 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:22.48 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-after-timeout.htm
+ 0:23.30 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:23.30 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-during-done.htm
+ 0:23.84 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:23.84 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-during-open.htm
+ 0:24.39 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:24.39 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-during-unsent.htm
+ 0:24.89 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:24.89 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-during-upload.htm
+ 0:25.40 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:25.40 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-event-abort.htm
+ 0:25.90 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:25.91 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-event-listeners.htm
+ 0:26.34 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1194) Full command: /Users/Vineela/Documents/servo/target/servo --cpu --hard-fail http://localhost:8000/XMLHttpRequest/abort-event-listeners.htm
+(pid:1194) "task 'SnifferManager' panicked at 'sending on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:571"
+ 0:26.38 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1194) "task 'LayoutTask' panicked at 'receiving on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:835"
+ 0:26.38 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1194) "task 'ScriptTask' panicked at 'sending on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:571"
+ 0:26.38 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1194) "Pipeline failed in hard-fail mode.  Crashing!"
+ 0:26.40 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:26.40 LOG: Thread-Log INFO STDOUT: Could not kill process, could not find pid: 1194, assuming it's already dead
+ 0:26.40 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-event-loadend.htm
+ 0:26.89 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:26.90 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-event-order.htm
+ 0:27.39 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:27.39 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-upload-event-abort.htm
+ 0:27.93 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:27.93 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/abort-upload-event-loadend.htm
+ 0:28.43 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:28.43 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/anonymous-mode-unsupported.htm
+ 0:28.98 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:28.98 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/data-uri.htm
+ 0:29.58 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/10. Unexpected 0
+ 0:29.59 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-abort.htm
+ 0:30.05 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1201) Full command: /Users/Vineela/Documents/servo/target/servo --cpu --hard-fail http://localhost:8000/XMLHttpRequest/event-abort.htm
+(pid:1201) "task 'SnifferManager' panicked at 'sending on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:571"
+ 0:30.09 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1201) "task 'LayoutTask' panicked at 'receiving on a closed channel', /Users/jack/src/rust/src/libsync/comm/mod.rs:835"
+ 0:30.09 PROCESS_OUTPUT: Thread-TestrunnerManager-1 (pid:1201) "Pipeline failed in hard-fail mode.  Crashing!"
+ 0:44.60 CRASH: Thread-TestrunnerManager-1 pid:1175. Test:None. Minidump anaylsed:False. Signature:[/XMLHttpRequest/event-abort.htm]
+
+ 0:44.60 TEST_END: Thread-TestrunnerManager-1 CRASH, expected OK
+
+ 0:44.60 LOG: Thread-TestrunnerManager-1 WARNING u'runner_teardown' ()
+ 0:44.60 LOG: Thread-TestrunnerManager-1 INFO Starting runner
+ 0:44.61 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-load.htm
+ 0:45.05 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:45.06 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-loadend.htm
+ 0:45.55 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:45.55 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-loadstart.htm
+ 0:46.04 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:46.04 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-progress.htm
+ 0:47.55 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:47.55 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-readystatechange-loaded.htm
+ 0:54.08 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:54.08 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-upload-progress-crossorigin.sub.htm
+ 0:54.52 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:54.52 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/event-upload-progress.htm
+ 0:54.90 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:54.91 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/formdata-blob.htm
+ 0:55.35 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/3. Unexpected 0
+ 0:55.35 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/formdata.htm
+ 0:55.84 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/4. Unexpected 0
+ 0:55.84 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getallresponseheaders-cookies.htm
+ 0:56.28 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:56.28 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getallresponseheaders-status.htm
+ 0:56.72 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:56.72 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getresponseheader-case-insensitive.htm
+ 0:57.11 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:57.11 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getresponseheader-chunked-trailer.htm
+ 0:57.55 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:57.55 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getresponseheader-cookies-and-more.htm
+ 0:57.99 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 1/1. Unexpected 0
+ 0:57.99 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getresponseheader-error-state.htm
+ 0:58.43 TEST_END: Thread-TestrunnerManager-1 Harness OK. Subtests passed 0/1. Unexpected 0
+ 0:58.44 TEST_START: Thread-TestrunnerManager-1 /XMLHttpRequest/getresponseheader-server-date.htm
