@@ -146,7 +146,7 @@ pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Send
         load_response: LoadResponse {
         metadata:      metadata,
         progress_port: progress_port,
-      },
+        },
         sender: next_rx
     });
     match result {
