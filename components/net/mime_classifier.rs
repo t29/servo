@@ -1,7 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 trait MIMEChecker {
     fn classify(&self, data:&Vec<u8>)->Option<(String,String)>;
 }
@@ -56,7 +55,10 @@ impl MIMEChecker for ByteMatcher {
 }
 
 struct Mp4Matcher;
-
+fn max(lhs:uint,rhs:uint)->uint
+{
+  return if lhs < rhs {rhs} else {lhs};
+}
 impl Mp4Matcher {
     fn matches(&self,data:&Vec<u8>)->bool {
         if data.len() < 12 {return false;}
@@ -100,89 +102,134 @@ impl MIMEChecker for Mp4Matcher {
         };
     }
 }
+struct BinaryOrPlaintextClassifier;
 
-struct MIMEClassifier {
-    //TODO Replace with boxed trait
-    byte_matchers: Vec<Box<MIMEChecker+Send>>,
+impl MIMEChecker for BinaryOrPlaintextClassifier {
+    fn classify(&self, data:&Vec<u8>)->Option<(String,String)> {
+        if (data.len() >=2 &&
+               (data[0]==0xFFu8&&data[1]==0xFEu8) &&
+               (data[0]==0xFEu8&&data[1]==0xFFu8)) ||
+           (data.len() >=3 && data[0]==0xEFu8 && data[1]==0xBBu8 && data[2]==0xBFu8)
+        {
+            return Some(("text".to_string(),"plain".to_string()));
+        }
+        return if data.iter().any(|x| *x<=0x08u8 ||
+                                 *x==0x0Bu8 ||
+                                 (*x>=0x0Eu8 && *x <= 0x1Au8) ||
+                                 (*x>=0x1Cu8 && *x <= 0x1Fu8)) {
+            Some(("application".to_string(),"octet-stream".to_string()))
+        }
+        else {
+            Some(("text".to_string(),"plain".to_string()))
+        }
+    }
+}
+struct GroupedClassifier {
+   byte_matchers: Vec<Box<MIMEChecker+Send>>,
+}
+impl GroupedClassifier {
+    fn push(&mut self,checker:Box<MIMEChecker+Send>)
+    {
+        self.byte_matchers.push(checker);
+    }
+    fn new()->GroupedClassifier {
+        return GroupedClassifier{byte_matchers:Vec::new()};
+    }
+    fn image_classifer()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::image_x_icon());
+        ret.push(box ByteMatcher::image_x_icon_cursor());
+        ret.push(box ByteMatcher::image_bmp());
+        ret.push(box ByteMatcher::image_gif89a());
+        ret.push(box ByteMatcher::image_gif87a());
+        ret.push(box ByteMatcher::image_webp());
+        ret.push(box ByteMatcher::image_png());
+        ret.push(box ByteMatcher::image_jpeg());
+
+        return ret;
+    }
+    fn audio_video_classifer()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::video_webm());
+        ret.push(box ByteMatcher::audio_basic());
+        ret.push(box ByteMatcher::audio_aiff());
+        ret.push(box ByteMatcher::audio_mpeg());
+        ret.push(box ByteMatcher::application_ogg());
+        ret.push(box ByteMatcher::audio_midi());
+        ret.push(box ByteMatcher::video_avi());
+        ret.push(box ByteMatcher::audio_wave());
+        ret.byte_matchers.push(box Mp4Matcher);
+        return ret;
+    }
+    fn scriptable_classifier()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::text_html_doctype_20());
+        ret.push(box ByteMatcher::text_html_doctype_3e());
+        ret.push(box ByteMatcher::text_html_page_20());
+        ret.push(box ByteMatcher::text_html_page_3e());
+        ret.push(box ByteMatcher::text_html_head_20());
+        ret.push(box ByteMatcher::text_html_head_3e());
+        ret.push(box ByteMatcher::text_html_script_20());
+        ret.push(box ByteMatcher::text_html_script_3e());
+        ret.push(box ByteMatcher::text_html_iframe_20());
+        ret.push(box ByteMatcher::text_html_iframe_3e());
+        ret.push(box ByteMatcher::text_html_h1_20());
+        ret.push(box ByteMatcher::text_html_h1_3e());
+        ret.push(box ByteMatcher::text_html_div_20());
+        ret.push(box ByteMatcher::text_html_div_3e());
+        ret.push(box ByteMatcher::text_html_font_20());
+        ret.push(box ByteMatcher::text_html_font_3e());
+        ret.push(box ByteMatcher::text_html_table_20());
+        ret.push(box ByteMatcher::text_html_table_3e());
+        ret.push(box ByteMatcher::text_html_a_20());
+        ret.push(box ByteMatcher::text_html_a_3e());
+        ret.push(box ByteMatcher::text_html_style_20());
+        ret.push(box ByteMatcher::text_html_style_3e());
+        ret.push(box ByteMatcher::text_html_title_20());
+        ret.push(box ByteMatcher::text_html_title_3e());
+        ret.push(box ByteMatcher::text_html_b_20());
+        ret.push(box ByteMatcher::text_html_b_3e());
+        ret.push(box ByteMatcher::text_html_body_20());
+        ret.push(box ByteMatcher::text_html_body_3e());
+        ret.push(box ByteMatcher::text_html_br_20());
+        ret.push(box ByteMatcher::text_html_br_3e());
+        ret.push(box ByteMatcher::text_html_p_20());
+        ret.push(box ByteMatcher::text_html_p_3e());
+        ret.push(box ByteMatcher::text_html_comment_20());
+        ret.push(box ByteMatcher::text_html_comment_3e());
+        ret.push(box ByteMatcher::text_xml());
+        ret.push(box ByteMatcher::application_pdf());
+        return ret;
+    }
+    fn plaintext_classifier()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::text_plain_utf_8_bom());
+        ret.push(box ByteMatcher::text_plain_utf_16le_bom());
+        ret.push(box ByteMatcher::text_plain_utf_16be_bom());
+        ret.push(box ByteMatcher::application_postscript());
+        return ret;
+    }
+    fn archive_classifier()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::application_x_gzip());
+        ret.push(box ByteMatcher::application_zip());
+        ret.push(box ByteMatcher::application_x_rar_compressed());
+        return ret;
+    }
+    fn font_classifier()->GroupedClassifier {
+        let mut ret = GroupedClassifier::new();
+        ret.push(box ByteMatcher::application_font_woff());
+        ret.push(box ByteMatcher::true_type_collection());
+        ret.push(box ByteMatcher::open_type());
+        ret.push(box ByteMatcher::true_type());
+        ret.push(box ByteMatcher::application_vnd_ms_font_object());
+        return ret;
+    }
 }
 
-impl MIMEClassifier {
-    fn new()->MIMEClassifier {
-         //TODO These should be configured from a settings file
-         //         and not hardcoded
-         let mut ret = MIMEClassifier{byte_matchers:Vec::new()};
-         ret.byte_matchers.push(box ByteMatcher::image_x_icon());
-         ret.byte_matchers.push(box ByteMatcher::image_x_icon_cursor());
-         ret.byte_matchers.push(box ByteMatcher::image_bmp());
-         ret.byte_matchers.push(box ByteMatcher::image_gif89a());
-         ret.byte_matchers.push(box ByteMatcher::image_gif87a());
-         ret.byte_matchers.push(box ByteMatcher::image_webp());
-         ret.byte_matchers.push(box ByteMatcher::image_png());
-         ret.byte_matchers.push(box ByteMatcher::image_jpeg());
-         ret.byte_matchers.push(box ByteMatcher::video_webm());
-         ret.byte_matchers.push(box ByteMatcher::audio_basic());
-         ret.byte_matchers.push(box ByteMatcher::audio_aiff());
-         ret.byte_matchers.push(box ByteMatcher::audio_mpeg());
-         ret.byte_matchers.push(box ByteMatcher::application_ogg());
-         ret.byte_matchers.push(box ByteMatcher::audio_midi());
-         ret.byte_matchers.push(box ByteMatcher::video_avi());
-         ret.byte_matchers.push(box ByteMatcher::audio_wave());
-         ret.byte_matchers.push(box ByteMatcher::application_font_woff());
-         ret.byte_matchers.push(box ByteMatcher::true_type_collection());
-         ret.byte_matchers.push(box ByteMatcher::open_type());
-         ret.byte_matchers.push(box ByteMatcher::true_type());
-         ret.byte_matchers.push(box ByteMatcher::application_vnd_ms_font_object());
-         ret.byte_matchers.push(box ByteMatcher::application_x_gzip());
-         ret.byte_matchers.push(box ByteMatcher::application_zip());
-         ret.byte_matchers.push(box ByteMatcher::application_x_rar_compressed());
-         ret.byte_matchers.push(box ByteMatcher::text_plain_utf_8_bom());
-         ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16le_bom());
-         ret.byte_matchers.push(box ByteMatcher::text_plain_utf_16be_bom());
-         ret.byte_matchers.push(box ByteMatcher::application_postscript());
-         ret.byte_matchers.push(box ByteMatcher::text_html_doctype_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_doctype_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_page_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_page_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_head_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_head_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_script_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_script_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_iframe_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_iframe_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_h1_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_h1_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_div_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_div_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_font_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_font_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_table_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_table_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_a_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_a_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_style_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_style_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_title_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_title_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_b_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_b_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_body_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_body_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_br_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_br_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_p_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_p_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_html_comment_20());
-         ret.byte_matchers.push(box ByteMatcher::text_html_comment_3e());
-         ret.byte_matchers.push(box ByteMatcher::text_xml());
-         ret.byte_matchers.push(box ByteMatcher::application_pdf());
 
-         //Specialized matchers
-         ret.byte_matchers.push(box Mp4Matcher);
-         return ret;
-
-    }
-
-    fn classify(&self,data:&Vec<u8>)->Option<(String,String)> {
+impl MIMEChecker for GroupedClassifier {
+   fn classify(&self,data:&Vec<u8>)->Option<(String,String)> {
         for matcher in self.byte_matchers.iter()
         {
             match matcher.classify(data)
@@ -192,6 +239,111 @@ impl MIMEClassifier {
             }
         }
         return None;
+   }
+}
+
+struct MIMEClassifier {
+   image_classifier: GroupedClassifier,
+   audio_video_classifer: GroupedClassifier, 
+   scriptable_classifier: GroupedClassifier,
+   plaintext_classifier: GroupedClassifier,
+   archive_classifer: GroupedClassifier,
+   binary_or_plaintext: BinaryOrPlaintextClassifier
+}
+
+impl MIMEClassifier {
+    fn new()->MIMEClassifier {
+         //TODO These should be configured from a settings file
+         //         and not hardcoded
+         let ret = MIMEClassifier{
+             image_classifier: GroupedClassifier::image_classifer(),
+             audio_video_classifer: GroupedClassifier::audio_video_classifer(),
+             scriptable_classifier: GroupedClassifier::scriptable_classifier(),
+             plaintext_classifier: GroupedClassifier::plaintext_classifier(),
+             archive_classifer: GroupedClassifier::archive_classifier(),
+             binary_or_plaintext: BinaryOrPlaintextClassifier
+         };
+        return ret;
+
+    }
+    //some sort of iterator over the classifiers might be better?
+    fn sniff_unknown_type(&self,sniff_scriptable:bool,data:&Vec<u8>)->Option<(String,String)> {
+        match if sniff_scriptable { self.scriptable_classifier.classify(data)} else {None} {
+          Some(tp)=>{return Some(tp);}
+          None=>{
+              match self.plaintext_classifier.classify(data) {
+                  Some(tp)=>{return Some(tp);}
+                  None=>{
+                      match self.image_classifier.classify(data) {
+                          Some(tp)=>{return Some(tp);}
+                          None=>{
+                              match self.archive_classifer.classify(data) {
+                                  Some(tp)=>{return Some(tp);}
+                                  None=>{return self.binary_or_plaintext.classify(data);}
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+       }
+    }
+
+    fn sniff_text_or_data(&self,data:&Vec<u8>)->Option<(String,String)> {
+        return self.binary_or_plaintext.classify(data);
+    }
+    fn is_xml(tp:&str,sub_tp:&str)->bool {
+      return match (tp,sub_tp,sub_tp.slice_from(max(sub_tp.len()-"+xml".len(),0))) {
+          (_,_,"+xml")|("application","xml",_)|("text","xml",_)=>{true}
+          _=>{false}
+      };
+    }
+    fn feed_or_html(&self,data:&Vec<u8>)->Option<(String,String)> {return None;}
+    //Performs MIME Type Sniffing Algorithm (section 7)
+    pub fn classify(&self,
+                    no_sniff:bool,
+                    check_for_apache_bug:bool,
+                    supplied_type:&Option<(String,String)>,
+                    data:&Vec<u8>)->Option<(String,String)> {
+
+        match *supplied_type{
+            None=>{
+              return self.sniff_unknown_type(!no_sniff,data);
+            }
+            Some(ref tup)=> {
+                let media_type = tup.ref0().as_slice();
+                let media_subtype = tup.ref1().as_slice();
+                match  (media_type,media_subtype){
+                    ("uknown","unknown")|("application","uknown")|("*","*")=>{
+                        return self.sniff_unknown_type(!no_sniff,data);
+                    }
+                    _ => {
+                        if no_sniff {return supplied_type.clone();}
+                        if check_for_apache_bug {return self.sniff_text_or_data(data);}
+                        if MIMEClassifier::is_xml(media_type,media_subtype) { return supplied_type.clone(); }
+                        if (media_type,media_subtype)==("text","html") {
+                           return self.feed_or_html(data);
+                        }
+
+                        match  if media_type=="image" {self.image_classifier.classify(data)} else {None} {
+                          Some(tup)=>{return Some(tup);}
+                          None=> {
+                            match media_type,media_subtype {
+                                ("audio",_)|("video",_)|("application","ogg")=>{
+                                    match (self.audio_video_classifer.classify(data)) {
+                                        Some(tp)=>{return Some(tp);}
+                                        None=>{}
+                                    }
+                                }
+                                _=> {}
+                            }
+                          }
+                        }
+                    }
+                }
+            }
+        };
+        return supplied_type.clone();
     }
 }
 
@@ -835,7 +987,7 @@ mod tests {
         let read_result = file.read_to_end();
         match read_result {
             Ok(data) => {
-                match classifier.classify(&data)
+                match classifier.classify(true,true,&None,&data)
                 {
                     Some(mime)=>{
                         let parsed_type=mime.ref0().clone();
