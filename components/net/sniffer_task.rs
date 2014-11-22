@@ -5,7 +5,7 @@
 //! A task that sniffs data
 use std::comm::{channel, Receiver, Sender, Disconnected};
 use std::task::TaskBuilder;
-use resource_task::{Consumer};
+use resource_task::{TargetedLoadResponse};
 
 pub type SnifferTask = Sender<TargetedLoadResponse>;
 
