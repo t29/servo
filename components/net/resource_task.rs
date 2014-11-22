@@ -9,7 +9,7 @@ use data_loader;
 use file_loader;
 use http_loader;
 use sniffer_task;
-use sniffer_task::{SnifferTask};
+use sniffer_task::SnifferTask;
 
 use std::comm::{channel, Receiver, Sender};
 use http::headers::content_type::MediaType;
@@ -119,7 +119,7 @@ pub struct LoadResponse {
     /// Port for reading data.
     pub progress_port: Receiver<ProgressMsg>,
 }
-
+/// For the use of Loaders to receive Load Response
 pub struct TargetedLoadResponse {
   pub load_response: LoadResponse,
   pub sender: Sender<LoadResponse>,
@@ -143,11 +143,11 @@ pub fn start_sending(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<L
 pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
     let (progress_chan, progress_port) = channel();
     let result = start_chan.send_opt(TargetedLoadResponse {
-      load_response: LoadResponse {
+        load_response: LoadResponse {
         metadata:      metadata,
         progress_port: progress_port,
       },
-      sender: next_rx
+        sender: next_rx
     });
     match result {
         Ok(_) => Ok(progress_chan),
@@ -178,8 +178,9 @@ pub type ResourceTask = Sender<ControlMsg>;
 /// Create a ResourceTask
 pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
     let (setup_chan, setup_port) = channel();
+    let mut snif_task = sniffer_task::new_sniffer_task();
     spawn_named("ResourceManager", proc() {
-        ResourceManager::new(setup_port, user_agent).start();
+        ResourceManager::new(setup_port, user_agent,snif_task).start();
     });
     setup_chan
 }
@@ -187,13 +188,15 @@ pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
 struct ResourceManager {
     from_client: Receiver<ControlMsg>,
     user_agent: Option<String>,
+    snif_task: SnifferTask,
 }
 
 impl ResourceManager {
-    fn new(from_client: Receiver<ControlMsg>, user_agent: Option<String>) -> ResourceManager {
+    fn new(from_client: Receiver<ControlMsg>, user_agent: Option<String>, snif_task: SnifferTask) -> ResourceManager {
         ResourceManager {
             from_client: from_client,
             user_agent: user_agent,
+            snif_task: snif_task,
         }
     }
 }
@@ -201,11 +204,10 @@ impl ResourceManager {
 
 impl ResourceManager {
     fn start(&self) {
-        let sniffer_task = sniffer_task::new_sniffer_task();
         loop {
             match self.from_client.recv() {
               Load(load_data, start_chan) => {
-                self.load(load_data, start_chan, sniffer_task.clone())
+                self.load(load_data, start_chan)
               }
               Exit => {
                 break
@@ -214,7 +216,7 @@ impl ResourceManager {
         }
     }
 
-    fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>, sniffer_task: SnifferTask) {
+    fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
         load_data.next_rx = Some(start_chan.clone());
@@ -226,14 +228,14 @@ impl ResourceManager {
             "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(sniffer_task, start_chan.clone(), Metadata::default(load_data.url))
+                start_sending(self.snif_task, start_chan.clone(), Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }
         };
         debug!("resource_task: loading url: {:s}", load_data.url.serialize());
 
-        loader(load_data, sniffer_task);
+        loader(load_data, self.snif_task);
     }
 }
 
