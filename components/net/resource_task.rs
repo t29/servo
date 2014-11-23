@@ -144,8 +144,8 @@ pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Send
     let (progress_chan, progress_port) = channel();
     let result = start_chan.send_opt(TargetedLoadResponse {
         load_response: LoadResponse {
-        metadata:      metadata,
-        progress_port: progress_port,
+            metadata:      metadata,
+            progress_port: progress_port,
         },
         sender: next_rx
     });
@@ -180,7 +180,7 @@ pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
     let (setup_chan, setup_port) = channel();
     let mut snif_task = sniffer_task::new_sniffer_task();
     spawn_named("ResourceManager", proc() {
-        ResourceManager::new(setup_port, user_agent,snif_task).start();
+        ResourceManager::new(setup_port, user_agent, snif_task).start();
     });
     setup_chan
 }
