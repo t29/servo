@@ -396,8 +396,9 @@ impl MIMEClassifier {
 
         return None;
     }
+
     //Performs MIME Type Sniffing Algorithm (section 7)
-    pub fn classify(&self,
+    fn classify(&self,
                     no_sniff:bool,
                     check_for_apache_bug:bool,
                     supplied_type:&Option<(String,String)>,
@@ -417,10 +418,10 @@ impl MIMEClassifier {
                     _ => {
                         if no_sniff {return supplied_type.clone();}
                         if check_for_apache_bug {return self.sniff_text_or_data(data);}
+
                         if MIMEClassifier::is_xml(media_type,media_subtype) { return supplied_type.clone(); }
-                        if (media_type,media_subtype)==("text","html") {
-                           return self.feed_or_html(data);
-                        }
+                        //Inplied in section 7.3, but flow is not clear
+                        if (media_type,media_subtype)==("text","html") {return self.feed_or_html(data); }
 
                         match  if media_type=="image" {self.image_classifier.classify(data)} else {None} {
                           Some(tup)=>{return Some(tup);}
@@ -1453,11 +1454,11 @@ mod tests {
 
     #[test]
     fn test_rss_feed() {
-        test_classification_full(&Path::new("text/xml/feed.rss"),"application","rss+xml",&None)
+        test_classification_full(&Path::new("text/xml/feed.rss"),"application","rss+xml",&Some(("text".to_string(),"html".to_string())));
     }
 
     #[test]
     fn test_atom_feed() {
-        test_classification_full(&Path::new("text/xml/feed.atom"),"application","atom+xml",&None)
+        test_classification_full(&Path::new("text/xml/feed.atom"),"application","atom+xml",&Some(("text".to_string(),"html".to_string())));
     }
 }
