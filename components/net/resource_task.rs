@@ -119,7 +119,7 @@ pub struct LoadResponse {
     /// Port for reading data.
     pub progress_port: Receiver<ProgressMsg>,
 }
-/// For the use of Loaders to receive Load Response
+/// A LoadResponse directed at a particular consumer
 pub struct TargetedLoadResponse {
   pub load_response: LoadResponse,
   pub sender: Sender<LoadResponse>,
@@ -178,9 +178,9 @@ pub type ResourceTask = Sender<ControlMsg>;
 /// Create a ResourceTask
 pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
     let (setup_chan, setup_port) = channel();
-    let mut snif_task = sniffer_task::new_sniffer_task();
+    let sniffer_task = sniffer_task::new_sniffer_task();
     spawn_named("ResourceManager", proc() {
-        ResourceManager::new(setup_port, user_agent, snif_task).start();
+        ResourceManager::new(setup_port, user_agent, sniffer_task.clone()).start();
     });
     setup_chan
 }
@@ -188,15 +188,15 @@ pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
 struct ResourceManager {
     from_client: Receiver<ControlMsg>,
     user_agent: Option<String>,
-    snif_task: SnifferTask,
+    sniffer_task: SnifferTask,
 }
 
 impl ResourceManager {
-    fn new(from_client: Receiver<ControlMsg>, user_agent: Option<String>, snif_task: SnifferTask) -> ResourceManager {
+    fn new(from_client: Receiver<ControlMsg>, user_agent: Option<String>, sniffer_task: SnifferTask) -> ResourceManager {
         ResourceManager {
             from_client: from_client,
             user_agent: user_agent,
-            snif_task: snif_task,
+            sniffer_task: sniffer_task,
         }
     }
 }
@@ -228,14 +228,14 @@ impl ResourceManager {
             "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(self.snif_task, start_chan.clone(), Metadata::default(load_data.url))
+                start_sending(self.sniffer_task.clone(), start_chan.clone(), Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }
         };
         debug!("resource_task: loading url: {:s}", load_data.url.serialize());
 
-        loader(load_data, self.snif_task);
+        loader(load_data, self.sniffer_task.clone());
     }
 }
 
