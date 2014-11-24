@@ -274,68 +274,9 @@ impl MIMEChecker for GroupedClassifier {
    }
 }
 
-struct MIMEClassifier {
-   image_classifier: GroupedClassifier,
-   audio_video_classifer: GroupedClassifier,
-   scriptable_classifier: GroupedClassifier,
-   plaintext_classifier: GroupedClassifier,
-   archive_classifer: GroupedClassifier,
-   binary_or_plaintext: BinaryOrPlaintextClassifier
-}
-
-impl MIMEClassifier {
-    fn new()->MIMEClassifier {
-         //TODO These should be configured from a settings file
-         //         and not hardcoded
-         let ret = MIMEClassifier{
-             image_classifier: GroupedClassifier::image_classifer(),
-             audio_video_classifer: GroupedClassifier::audio_video_classifer(),
-             scriptable_classifier: GroupedClassifier::scriptable_classifier(),
-             plaintext_classifier: GroupedClassifier::plaintext_classifier(),
-             archive_classifer: GroupedClassifier::archive_classifier(),
-             binary_or_plaintext: BinaryOrPlaintextClassifier
-         };
-        return ret;
-
-    }
-    //some sort of iterator over the classifiers might be better?
-    fn sniff_unknown_type(&self,sniff_scriptable:bool,data:&Vec<u8>)->Option<(String,String)> {
-        match if sniff_scriptable { self.scriptable_classifier.classify(data)} else {None} {
-          Some(tp)=>{return Some(tp);}
-          None=>{
-              match self.plaintext_classifier.classify(data) {
-                  Some(tp)=>{return Some(tp);}
-                  None=>{
-                      match self.image_classifier.classify(data) {
-                          Some(tp)=>{return Some(tp);}
-                          None => {
-                              match self.audio_video_classifer.classify(data) {
-                                  Some(tp)=>{return Some(tp);}
-                                  None=>{
-                                      match self.archive_classifer.classify(data) {
-                                          Some(tp)=>{return Some(tp);}
-                                          None=>{return self.binary_or_plaintext.classify(data);}
-                                      }
-                                  }
-                              }
-                          }
-                      }
-                  }
-              }
-          }
-       }
-    }
-
-    fn sniff_text_or_data(&self,data:&Vec<u8>)->Option<(String,String)> {
-        return self.binary_or_plaintext.classify(data);
-    }
-    fn is_xml(tp:&str,sub_tp:&str)->bool {
-      return match (tp,sub_tp,sub_tp.slice_from(max(sub_tp.len()-"+xml".len(),0))) {
-          (_,_,"+xml")|("application","xml",_)|("text","xml",_)=>{true}
-          _=>{false}
-      };
-    }
-    fn feed_or_html(&self,data:&Vec<u8>)->Option<(String,String)> {
+struct FeedsClassifier;
+impl MIMEChecker for FeedsClassifier {
+fn classify(&self,data:&Vec<u8>)->Option<(String,String)> {
         let length = data.len();
         let mut data_iterator = data.iter();
 
@@ -396,6 +337,72 @@ impl MIMEClassifier {
 
         return None;
     }
+}
+
+struct MIMEClassifier {
+   image_classifier: GroupedClassifier,
+   audio_video_classifer: GroupedClassifier,
+   scriptable_classifier: GroupedClassifier,
+   plaintext_classifier: GroupedClassifier,
+   archive_classifer: GroupedClassifier,
+   binary_or_plaintext: BinaryOrPlaintextClassifier,
+   feeds_classifier: FeedsClassifier
+}
+
+impl MIMEClassifier {
+    fn new()->MIMEClassifier {
+         //TODO These should be configured from a settings file
+         //         and not hardcoded
+         let ret = MIMEClassifier{
+             image_classifier: GroupedClassifier::image_classifer(),
+             audio_video_classifer: GroupedClassifier::audio_video_classifer(),
+             scriptable_classifier: GroupedClassifier::scriptable_classifier(),
+             plaintext_classifier: GroupedClassifier::plaintext_classifier(),
+             archive_classifer: GroupedClassifier::archive_classifier(),
+             binary_or_plaintext: BinaryOrPlaintextClassifier,
+             feeds_classifier: FeedsClassifier
+         };
+        return ret;
+
+    }
+    //some sort of iterator over the classifiers might be better?
+    fn sniff_unknown_type(&self,sniff_scriptable:bool,data:&Vec<u8>)->Option<(String,String)> {
+        match if sniff_scriptable { self.scriptable_classifier.classify(data)} else {None} {
+          Some(tp)=>{return Some(tp);}
+          None=>{
+              match self.plaintext_classifier.classify(data) {
+                  Some(tp)=>{return Some(tp);}
+                  None=>{
+                      match self.image_classifier.classify(data) {
+                          Some(tp)=>{return Some(tp);}
+                          None => {
+                              match self.audio_video_classifer.classify(data) {
+                                  Some(tp)=>{return Some(tp);}
+                                  None=>{
+                                      match self.archive_classifer.classify(data) {
+                                          Some(tp)=>{return Some(tp);}
+                                          None=>{return self.binary_or_plaintext.classify(data);}
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+       }
+    }
+
+    fn sniff_text_or_data(&self,data:&Vec<u8>)->Option<(String,String)> {
+        return self.binary_or_plaintext.classify(data);
+    }
+    fn is_xml(tp:&str,sub_tp:&str)->bool {
+      return match (tp,sub_tp,sub_tp.slice_from(max(sub_tp.len()-"+xml".len(),0))) {
+          (_,_,"+xml")|("application","xml",_)|("text","xml",_)=>{true}
+          _=>{false}
+      };
+    }
+    fn is_html(tp:&str,sub_tp:&str)->bool { return tp=="text"&&sub_tp=="html"; }
 
     //Performs MIME Type Sniffing Algorithm (section 7)
     fn classify(&self,
@@ -421,7 +428,12 @@ impl MIMEClassifier {
 
                         if MIMEClassifier::is_xml(media_type,media_subtype) { return supplied_type.clone(); }
                         //Inplied in section 7.3, but flow is not clear
-                        if (media_type,media_subtype)==("text","html") {return self.feed_or_html(data); }
+                        if MIMEClassifier::is_html(media_type,media_subtype) {
+                            match (self.feeds_classifier.classify(data)) {
+                                None=>{return supplied_type.clone();}
+                                Some(tup)=>{return Some(tup);}
+                            }
+                        }
 
                         match  if media_type=="image" {self.image_classifier.classify(data)} else {None} {
                           Some(tup)=>{return Some(tup);}
