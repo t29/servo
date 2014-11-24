@@ -308,10 +308,15 @@ impl MIMEClassifier {
                   None=>{
                       match self.image_classifier.classify(data) {
                           Some(tp)=>{return Some(tp);}
-                          None=>{
-                              match self.archive_classifer.classify(data) {
+                          None => {
+                              match self.audio_video_classifer.classify(data) {
                                   Some(tp)=>{return Some(tp);}
-                                  None=>{return self.binary_or_plaintext.classify(data);}
+                                  None=>{
+                                      match self.archive_classifer.classify(data) {
+                                          Some(tp)=>{return Some(tp);}
+                                          None=>{return self.binary_or_plaintext.classify(data);}
+                                      }
+                                  }
                               }
                           }
                       }
@@ -1067,7 +1072,8 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn test_classification_full(filename_orig:&Path,type_string:&str,subtype_string:&str){
+    fn test_classification_full(filename_orig:&Path,type_string:&str,subtype_string:&str,
+                                supplied_type:&Option<(String,String)>){
 
         let mut filename = Path::new("./tests/content/parsable_mime/");
 
@@ -1079,7 +1085,7 @@ mod tests {
         let read_result = file.read_to_end();
         match read_result {
             Ok(data) => {
-                match classifier.classify(true,true,&None,&data)
+                match classifier.classify(false,false,supplied_type,&data)
                 {
                     Some(mime)=>{
                         let parsed_type=mime.ref0().clone();
@@ -1099,358 +1105,359 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn test_classification(file:&str,type_string:&str,subtype_string:&str){
+    fn test_classification(file:&str,type_string:&str,subtype_string:&str,
+                           supplied_type:&Option<(String,String)>){
         let mut x = Path::new("./");
         x.push(type_string);
         x.push(subtype_string);
         x.push(file);
-        test_classification_full(&x,type_string,subtype_string);
+        test_classification_full(&x,type_string,subtype_string,supplied_type);
     }
 
     #[test]
-    fn test_classification_x_icon() { test_classification("test.ico","image","x-icon"); }
+    fn test_classification_x_icon() { test_classification("test.ico","image","x-icon",&None); }
 
     #[test]
     fn test_classification_x_icon_cursor() {
-     test_classification("test_cursor.ico","image","x-icon");
+     test_classification("test_cursor.ico","image","x-icon",&None);
     }
 
     #[test]
-    fn test_classification_bmp() { test_classification("test.bmp","image","bmp"); }
+    fn test_classification_bmp() { test_classification("test.bmp","image","bmp",&None); }
 
     #[test]
     fn test_classification_gif87a() {
-        test_classification("test87a.gif","image","gif");
+        test_classification("test87a.gif","image","gif",&None);
     }
 
     #[test]
     fn test_classification_gif89a() {
-        test_classification("test89a.gif","image","gif");
+        test_classification("test89a.gif","image","gif",&None);
     }
 
     #[test]
     fn test_classification_webp() {
-        test_classification("test.webp","image","webp");
+        test_classification("test.webp","image","webp",&None);
     }
 
     #[test]
     fn test_classification_png() {
-        test_classification("test.png","image","png");
+        test_classification("test.png","image","png",&None);
     }
 
     #[test]
     fn test_classification_jpg() {
-        test_classification("test.jpg","image","jpeg");
+        test_classification("test.jpg","image","jpeg",&None);
     }
 
     #[test]
     fn test_classification_webm() {
-        test_classification("test.webm","video","webm");
+        test_classification("test.webm","video","webm",&None);
     }
 
     #[test]
     fn test_classification_mp4() {
-        test_classification("test.mp4","video","mp4");
+        test_classification("test.mp4","video","mp4",&None);
     }
 
     #[test]
     fn test_classification_avi() {
-        test_classification("test.avi","video","avi");
+        test_classification("test.avi","video","avi",&None);
     }
 
     #[test]
     fn test_classification_basic() {
-        test_classification("test.au","audio","basic");
+        test_classification("test.au","audio","basic",&None);
     }
 
     #[test]
     fn test_classification_aiff() {
-        test_classification("test.aif","audio","aiff");
+        test_classification("test.aif","audio","aiff",&None);
     }
 
     #[test]
     fn test_classification_mpeg() {
-        test_classification("test.mp3","audio","mpeg");
+        test_classification("test.mp3","audio","mpeg",&None);
     }
 
     #[test]
     fn test_classification_midi() {
-        test_classification("test.mid","audio","midi");
+        test_classification("test.mid","audio","midi",&None);
     }
 
     #[test]
     fn test_classification_wave() {
-        test_classification("test.wav","audio","wave");
+        test_classification("test.wav","audio","wave",&None);
     }
 
     #[test]
     fn test_classification_ogg() {
-        test_classification("small.ogg","application","ogg");
+        test_classification("small.ogg","application","ogg",&None);
     }
 
     #[test]
     fn test_classification_vsn_ms_fontobject() {
-        test_classification("vnd.ms-fontobject","application","vnd.ms-fontobject");
+        test_classification("vnd.ms-fontobject","application","vnd.ms-fontobject",&None);
     }
 
     #[test]
     fn test_true_type() {
-        test_classification_full(&Path::new("unknown/true_type.ttf"),"(TrueType)","");
+        test_classification_full(&Path::new("unknown/true_type.ttf"),"(TrueType)","",&None);
     }
 
     #[test]
     fn test_open_type() {
-        test_classification_full(&Path::new("unknown/open_type"),"(OpenType)","");
+        test_classification_full(&Path::new("unknown/open_type"),"(OpenType)","",&None);
     }
 
     #[test]
     fn test_classification_true_type_collection() {
-        test_classification_full(&Path::new("unknown/true_type_collection.ttc"),"(TrueType Collection)","");
+        test_classification_full(&Path::new("unknown/true_type_collection.ttc"),"(TrueType Collection)","",&None);
     }
 
     #[test]
     fn test_classification_woff() {
-        test_classification("test.wof","application","font-woff");
+        test_classification("test.wof","application","font-woff",&None);
     }
 
     #[test]
     fn test_classification_gzip() {
-        test_classification("test.gz","application","x-gzip");
+        test_classification("test.gz","application","x-gzip",&None);
     }
 
     #[test]
     fn test_classification_zip() {
-        test_classification("test.zip","application","zip");
+        test_classification("test.zip","application","zip",&None);
     }
 
     #[test]
     fn test_classification_rar() {
-        test_classification("test.rar","application","x-rar-compressed");
+        test_classification("test.rar","application","x-rar-compressed",&None);
     }
 
     #[test]
     fn test_text_html_doctype_20() {
-        test_classification("text_html_doctype_20.html","text","html");
-        test_classification("text_html_doctype_20_u.html","text","html");
+        test_classification("text_html_doctype_20.html","text","html",&None);
+        test_classification("text_html_doctype_20_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_doctype_3e() {
-        test_classification("text_html_doctype_3e.html","text","html");
-        test_classification("text_html_doctype_3e_u.html","text","html");
+        test_classification("text_html_doctype_3e.html","text","html",&None);
+        test_classification("text_html_doctype_3e_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_page_20() {
-        test_classification("text_html_page_20.html","text","html");
-        test_classification("text_html_page_20_u.html","text","html");
+        test_classification("text_html_page_20.html","text","html",&None);
+        test_classification("text_html_page_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_page_3e() {
-        test_classification("text_html_page_3e.html","text","html");
-        test_classification("text_html_page_3e_u.html","text","html");
+        test_classification("text_html_page_3e.html","text","html",&None);
+        test_classification("text_html_page_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_head_20() {
-        test_classification("text_html_head_20.html","text","html");
-        test_classification("text_html_head_20_u.html","text","html");
+        test_classification("text_html_head_20.html","text","html",&None);
+        test_classification("text_html_head_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_head_3e() {
-        test_classification("text_html_head_3e.html","text","html");
-        test_classification("text_html_head_3e_u.html","text","html");
+        test_classification("text_html_head_3e.html","text","html",&None);
+        test_classification("text_html_head_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_script_20() {
-        test_classification("text_html_script_20.html","text","html");
-        test_classification("text_html_script_20_u.html","text","html");
+        test_classification("text_html_script_20.html","text","html",&None);
+        test_classification("text_html_script_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_script_3e() {
-        test_classification("text_html_script_3e.html","text","html");
-        test_classification("text_html_script_3e_u.html","text","html");
+        test_classification("text_html_script_3e.html","text","html",&None);
+        test_classification("text_html_script_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_iframe_20() {
-        test_classification("text_html_iframe_20.html","text","html");
-        test_classification("text_html_iframe_20_u.html","text","html");
+        test_classification("text_html_iframe_20.html","text","html",&None);
+        test_classification("text_html_iframe_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_iframe_3e() {
-        test_classification("text_html_iframe_3e.html","text","html");
-        test_classification("text_html_iframe_3e_u.html","text","html");
+        test_classification("text_html_iframe_3e.html","text","html",&None);
+        test_classification("text_html_iframe_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_h1_20() {
-        test_classification("text_html_h1_20.html","text","html");
-        test_classification("text_html_h1_20_u.html","text","html");
+        test_classification("text_html_h1_20.html","text","html",&None);
+        test_classification("text_html_h1_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_h1_3e() {
-        test_classification("text_html_h1_3e.html","text","html");
-        test_classification("text_html_h1_3e_u.html","text","html");
+        test_classification("text_html_h1_3e.html","text","html",&None);
+        test_classification("text_html_h1_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_div_20() {
-        test_classification("text_html_div_20.html","text","html");
-        test_classification("text_html_div_20_u.html","text","html");
+        test_classification("text_html_div_20.html","text","html",&None);
+        test_classification("text_html_div_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_div_3e() {
-        test_classification("text_html_div_3e.html","text","html");
-        test_classification("text_html_div_3e_u.html","text","html");
+        test_classification("text_html_div_3e.html","text","html",&None);
+        test_classification("text_html_div_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_font_20() {
-        test_classification("text_html_font_20.html","text","html");
-        test_classification("text_html_font_20_u.html","text","html");
+        test_classification("text_html_font_20.html","text","html",&None);
+        test_classification("text_html_font_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_font_3e() {
-        test_classification("text_html_font_3e.html","text","html");
-        test_classification("text_html_font_3e_u.html","text","html");
+        test_classification("text_html_font_3e.html","text","html",&None);
+        test_classification("text_html_font_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_table_20() {
-        test_classification("text_html_table_20.html","text","html");
-        test_classification("text_html_table_20_u.html","text","html");
+        test_classification("text_html_table_20.html","text","html",&None);
+        test_classification("text_html_table_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_table_3e() {
-        test_classification("text_html_table_3e.html","text","html");
-        test_classification("text_html_table_3e_u.html","text","html");
+        test_classification("text_html_table_3e.html","text","html",&None);
+        test_classification("text_html_table_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_a_20() {
-        test_classification("text_html_a_20.html","text","html");
-        test_classification("text_html_a_20_u.html","text","html");
+        test_classification("text_html_a_20.html","text","html",&None);
+        test_classification("text_html_a_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_a_3e() {
-        test_classification("text_html_a_3e.html","text","html");
-        test_classification("text_html_a_3e_u.html","text","html");
+        test_classification("text_html_a_3e.html","text","html",&None);
+        test_classification("text_html_a_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_style_20() {
-        test_classification("text_html_style_20.html","text","html");
-        test_classification("text_html_style_20_u.html","text","html");
+        test_classification("text_html_style_20.html","text","html",&None);
+        test_classification("text_html_style_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_style_3e() {
-        test_classification("text_html_style_3e.html","text","html");
-        test_classification("text_html_style_3e_u.html","text","html");
+        test_classification("text_html_style_3e.html","text","html",&None);
+        test_classification("text_html_style_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_title_20() {
-        test_classification("text_html_title_20.html","text","html");
-        test_classification("text_html_title_20_u.html","text","html");
+        test_classification("text_html_title_20.html","text","html",&None);
+        test_classification("text_html_title_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_title_3e() {
-        test_classification("text_html_title_3e.html","text","html");
-        test_classification("text_html_title_3e_u.html","text","html");
+        test_classification("text_html_title_3e.html","text","html",&None);
+        test_classification("text_html_title_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_b_20() {
-        test_classification("text_html_b_20.html","text","html");
-        test_classification("text_html_b_20_u.html","text","html");
+        test_classification("text_html_b_20.html","text","html",&None);
+        test_classification("text_html_b_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_b_3e() {
-        test_classification("text_html_b_3e.html","text","html");
-        test_classification("text_html_b_3e_u.html","text","html");
+        test_classification("text_html_b_3e.html","text","html",&None);
+        test_classification("text_html_b_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_body_20() {
-        test_classification("text_html_body_20.html","text","html");
-        test_classification("text_html_body_20_u.html","text","html");
+        test_classification("text_html_body_20.html","text","html",&None);
+        test_classification("text_html_body_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_body_3e() {
-        test_classification("text_html_body_3e.html","text","html");
-        test_classification("text_html_body_3e_u.html","text","html");
+        test_classification("text_html_body_3e.html","text","html",&None);
+        test_classification("text_html_body_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_br_20() {
-        test_classification("text_html_br_20.html","text","html");
-        test_classification("text_html_br_20_u.html","text","html");
+        test_classification("text_html_br_20.html","text","html",&None);
+        test_classification("text_html_br_20_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_br_3e() {
-        test_classification("text_html_br_3e.html","text","html");
-        test_classification("text_html_br_3e_u.html","text","html");
+        test_classification("text_html_br_3e.html","text","html",&None);
+        test_classification("text_html_br_3e_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_p_20() {
-        test_classification("text_html_p_20.html","text","html");
-        test_classification("text_html_p_20_u.html","text","html");
+        test_classification("text_html_p_20.html","text","html",&None);
+        test_classification("text_html_p_20_u.html","text","html",&None);
     }
     #[test]
     fn test_text_html_p_3e() {
-        test_classification("text_html_p_3e.html","text","html");
-        test_classification("text_html_p_3e_u.html","text","html");
+        test_classification("text_html_p_3e.html","text","html",&None);
+        test_classification("text_html_p_3e_u.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_comment_20() {
-        test_classification("text_html_comment_20.html","text","html");
+        test_classification("text_html_comment_20.html","text","html",&None);
     }
 
     #[test]
     fn test_text_html_comment_3e() {
-        test_classification("text_html_comment_3e.html","text","html");
+        test_classification("text_html_comment_3e.html","text","html",&None);
     }
 
     #[test]
     fn test_xml() {
-        test_classification("test.xml","text","xml");
+        test_classification("test.xml","text","xml",&None);
     }
 
     #[test]
     fn test_pdf() {
-        test_classification("test.pdf","application","pdf");
+        test_classification("test.pdf","application","pdf",&None);
     }
 
     #[test]
     fn test_postscript() {
-        test_classification("test.ps","application","postscript");
+        test_classification("test.ps","application","postscript",&None);
     }
 
     #[test]
     fn test_utf_16be_bom() {
-        test_classification("utf16bebom.txt","text","plain");
+        test_classification("utf16bebom.txt","text","plain",&None);
     }
 
     #[test]
     fn test_utf_16le_bom() {
-        test_classification("utf16lebom.txt","text","plain");
+        test_classification("utf16lebom.txt","text","plain",&None);
     }
 
     #[test]
     fn test_utf_8_bom() {
-        test_classification("utf8bom.txt","text","plain");
+        test_classification("utf8bom.txt","text","plain",&None);
     }
 
     #[test]
     fn test_rss_feed() {
-        test_classification_full(&Path::new("text/xml/feed.rss"),"application","rss+xml")
+        test_classification_full(&Path::new("text/xml/feed.rss"),"application","rss+xml",&None)
     }
 
     #[test]
     fn test_atom_feed() {
-        test_classification_full(&Path::new("text/xml/feed.atom"),"application","atom+xml")
+        test_classification_full(&Path::new("text/xml/feed.atom"),"application","atom+xml",&None)
     }
 }
