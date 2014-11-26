@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use resource_task::{TargetedLoadResponse, Metadata, Done, LoadData, start_sending};
+use resource_task::{TargetedLoadResponse, Metadata, Done, LoadData, start_sending, ResponseSenders};
 use file_loader;
 
 use std::io::fs::PathExtensions;
@@ -14,13 +14,19 @@ use servo_util::resource_files::resources_dir_path;
 pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     match load_data.url.non_relative_scheme_data().unwrap() {
         "blank" => {
-            let chan = start_sending(start_chan, load_data.next_rx.unwrap(), Metadata {
-                final_url: load_data.url,
-                content_type: Some(("text".to_string(), "html".to_string())),
-                charset: Some("utf-8".to_string()),
-                headers: None,
-                status: StatusOk,
-            });
+            let chan = start_sending(
+                ResponseSenders {
+                    tlr: start_chan,
+                    lr: load_data.next_rx.unwrap(),
+                },
+                Metadata {
+                    final_url: load_data.url,
+                    content_type: Some(("text".to_string(), "html".to_string())),
+                    charset: Some("utf-8".to_string()),
+                    headers: None,
+                    status: StatusOk,
+                }
+            );
             chan.send(Done(Ok(())));
             return
         }
@@ -32,7 +38,12 @@ pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>
             load_data.url = Url::from_file_path(&path).unwrap();
         }
         _ => {
-            start_sending(start_chan, load_data.next_rx.unwrap(), Metadata::default(load_data.url))
+            start_sending(
+                ResponseSenders {
+                    tlr: start_chan,
+                    lr: load_data.next_rx.unwrap(),
+                },
+                Metadata::default(load_data.url))
                 .send(Done(Err("Unknown about: URL.".to_string())));
             return
         }

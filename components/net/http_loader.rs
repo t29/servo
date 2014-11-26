@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use resource_task::{Metadata, Payload, Done, LoadResponse, TargetedLoadResponse, LoadData, start_sending_opt};
+use resource_task::{Metadata, Payload, Done, TargetedLoadResponse, LoadData, start_sending_opt, ResponseSenders};
 
 use log;
 use std::collections::HashSet;
@@ -16,8 +16,8 @@ pub fn factory(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     spawn_named("http_loader", proc() load(load_data, start_chan))
 }
 
-fn send_error(url: Url, err: String, start_chan: Sender<TargetedLoadResponse>, lr_sender: Sender<LoadResponse>) {
-    match start_sending_opt(start_chan, lr_sender, Metadata::default(url)) {
+fn send_error(url: Url, err: String, senders: ResponseSenders) {
+    match start_sending_opt(senders, Metadata::default(url)) {
         Ok(p) => p.send(Done(Err(err))),
         _ => {}
     };
@@ -31,18 +31,23 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     let mut iters = 0u;
     let mut url = load_data.url.clone();
     let mut redirected_to = HashSet::new();
+    
+    let senders = ResponseSenders {
+        tlr: start_chan,
+        lr: load_data.next_rx.unwrap()
+    };
 
     // Loop to handle redirects.
     loop {
         iters = iters + 1;
 
         if iters > max_redirects {
-            send_error(url, "too many redirects".to_string(), start_chan, load_data.next_rx.unwrap());
+            send_error(url, "too many redirects".to_string(), senders);
             return;
         }
 
         if redirected_to.contains(&url) {
-            send_error(url, "redirect loop".to_string(), start_chan, load_data.next_rx.unwrap());
+            send_error(url, "redirect loop".to_string(), senders);
             return;
         }
 
@@ -52,7 +57,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
             "http" | "https" => {}
             _ => {
                 let s = format!("{:s} request, but we don't support that scheme", url.scheme);
-                send_error(url, s, start_chan, load_data.next_rx.unwrap());
+                send_error(url, s, senders);
                 return;
             }
         }
@@ -63,7 +68,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
         let mut writer = match request {
             Ok(w) => box w,
             Err(e) => {
-                send_error(url, e.desc.to_string(), start_chan, load_data.next_rx.unwrap());
+                send_error(url, e.desc.to_string(), senders);
                 return;
             }
         };
@@ -81,7 +86,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
                 writer.headers.content_length = Some(data.len());
                 match writer.write(data.as_slice()) {
                     Err(e) => {
-                        send_error(url, e.desc.to_string(), start_chan, load_data.next_rx.unwrap());
+                        send_error(url, e.desc.to_string(), senders);
                         return;
                     }
                     _ => {}
@@ -92,7 +97,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
         let mut response = match writer.read_response() {
             Ok(r) => r,
             Err((_, e)) => {
-                send_error(url, e.desc.to_string(), start_chan, load_data.next_rx.unwrap());
+                send_error(url, e.desc.to_string(), senders);
                 return;
             }
         };
@@ -113,7 +118,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
                         Some(ref c) => {
                             if c.preflight {
                                 // The preflight lied
-                                send_error(url, "Preflight fetch inconsistent with main fetch".to_string(), start_chan, load_data.next_rx.unwrap());
+                                send_error(url, "Preflight fetch inconsistent with main fetch".to_string(), senders);
                                 return;
                             } else {
                                 // XXXManishearth There are some CORS-related steps here,
@@ -135,7 +140,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
         metadata.headers = Some(response.headers.clone());
         metadata.status = response.status.clone();
 
-        let progress_chan = match start_sending_opt(start_chan, load_data.next_rx.unwrap(), metadata) {
+        let progress_chan = match start_sending_opt(senders, metadata) {
             Ok(p) => p,
             _ => return
         };

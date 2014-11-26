@@ -125,6 +125,11 @@ pub struct TargetedLoadResponse {
   pub sender: Sender<LoadResponse>,
 }
 
+pub struct ResponseSenders {
+    pub tlr: Sender<TargetedLoadResponse>,
+    pub lr: Sender<LoadResponse>,
+}
+
 /// Messages sent in response to a `Load` message
 #[deriving(PartialEq,Show)]
 pub enum ProgressMsg {
@@ -135,19 +140,19 @@ pub enum ProgressMsg {
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Sender<ProgressMsg> {
-    start_sending_opt(start_chan, next_rx, metadata).ok().unwrap()
+pub fn start_sending(senders: ResponseSenders, metadata: Metadata) -> Sender<ProgressMsg> {
+    start_sending_opt(senders, metadata).ok().unwrap()
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
+pub fn start_sending_opt(senders: ResponseSenders, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
     let (progress_chan, progress_port) = channel();
-    let result = start_chan.send_opt(TargetedLoadResponse {
+    let result = senders.tlr.send_opt(TargetedLoadResponse {
         load_response: LoadResponse {
             metadata:      metadata,
             progress_port: progress_port,
         },
-        sender: next_rx
+        sender: senders.lr
     });
     match result {
         Ok(_) => Ok(progress_chan),
@@ -228,7 +233,11 @@ impl ResourceManager {
             "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(self.sniffer_task.clone(), start_chan.clone(), Metadata::default(load_data.url))
+                start_sending(ResponseSenders {
+                        tlr: self.sniffer_task.clone(),
+                        lr: start_chan.clone(),
+                    },
+                    Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }
