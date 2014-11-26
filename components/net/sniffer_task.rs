@@ -34,7 +34,7 @@ impl SnifferManager {
   fn start(&self) {
     loop {
       match self.data_receiver.try_recv() {
-        Ok(snif_data) => snif_data.sender.send(snif_data.load_response),
+        Ok(snif_data) => snif_data.consumer.send(snif_data.load_response),
         Err(e) => {
           if e == Disconnected {
             break

@@ -122,7 +122,13 @@ pub struct LoadResponse {
 /// A LoadResponse directed at a particular consumer
 pub struct TargetedLoadResponse {
   pub load_response: LoadResponse,
-  pub sender: Sender<LoadResponse>,
+  pub consumer: Sender<LoadResponse>,
+}
+
+// Data structure containing ports
+pub struct ResponseSenders {
+    pub tlr: Sender<TargetedLoadResponse>,
+    pub lr: Sender<LoadResponse>,
 }
 
 /// Messages sent in response to a `Load` message
@@ -135,19 +141,19 @@ pub enum ProgressMsg {
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Sender<ProgressMsg> {
-    start_sending_opt(start_chan, next_rx, metadata).ok().unwrap()
+pub fn start_sending(senders: ResponseSenders, metadata: Metadata) -> Sender<ProgressMsg> {
+    start_sending_opt(senders, metadata).ok().unwrap()
 }
 
 /// For use by loaders in responding to a Load message.
-pub fn start_sending_opt(start_chan: Sender<TargetedLoadResponse>, next_rx: Sender<LoadResponse>, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
+pub fn start_sending_opt(senders: ResponseSenders, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
     let (progress_chan, progress_port) = channel();
-    let result = start_chan.send_opt(TargetedLoadResponse {
+    let result = senders.tlr.send_opt(TargetedLoadResponse {
         load_response: LoadResponse {
             metadata:      metadata,
             progress_port: progress_port,
         },
-        sender: next_rx
+        consumer: senders.lr
     });
     match result {
         Ok(_) => Ok(progress_chan),
@@ -180,7 +186,7 @@ pub fn new_resource_task(user_agent: Option<String>) -> ResourceTask {
     let (setup_chan, setup_port) = channel();
     let sniffer_task = sniffer_task::new_sniffer_task();
     spawn_named("ResourceManager", proc() {
-        ResourceManager::new(setup_port, user_agent, sniffer_task.clone()).start();
+        ResourceManager::new(setup_port, user_agent, sniffer_task).start();
     });
     setup_chan
 }
@@ -228,7 +234,11 @@ impl ResourceManager {
             "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(self.sniffer_task.clone(), start_chan.clone(), Metadata::default(load_data.url))
+                start_sending(ResponseSenders {
+                        tlr: self.sniffer_task.clone(),
+                        lr: start_chan.clone(),
+                    },
+                    Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }
