@@ -122,9 +122,10 @@ pub struct LoadResponse {
 /// A LoadResponse directed at a particular consumer
 pub struct TargetedLoadResponse {
   pub load_response: LoadResponse,
-  pub sender: Sender<LoadResponse>,
+  pub consumer: Sender<LoadResponse>,
 }
 
+// Data structure containing ports
 pub struct ResponseSenders {
     pub tlr: Sender<TargetedLoadResponse>,
     pub lr: Sender<LoadResponse>,
@@ -152,7 +153,7 @@ pub fn start_sending_opt(senders: ResponseSenders, metadata: Metadata) -> Result
             metadata:      metadata,
             progress_port: progress_port,
         },
-        sender: senders.lr
+        consumer: senders.lr
     });
     match result {
         Ok(_) => Ok(progress_chan),
