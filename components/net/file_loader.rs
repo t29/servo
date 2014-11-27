@@ -34,7 +34,7 @@ pub fn factory(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     assert!("file" == url.scheme.as_slice());
     let senders = ResponseSenders {
         immediate_consumer: start_chan,
-        eventual_consumer: load_data.consumer.unwrap(),
+        eventual_consumer: load_data.consumer,
     };
     let progress_chan = start_sending(senders, Metadata::default(url.clone())
     );

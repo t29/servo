@@ -25,7 +25,7 @@ use servo_util::task::spawn_named;
 
 pub enum ControlMsg {
     /// Request the data associated with a particular URL
-    Load(LoadData, Sender<LoadResponse>),
+    Load(LoadData),
     Exit
 }
 
@@ -36,18 +36,18 @@ pub struct LoadData {
     pub headers: RequestHeaderCollection,
     pub data: Option<Vec<u8>>,
     pub cors: Option<ResourceCORSData>,
-    pub consumer: Option<Sender<LoadResponse>>,
+    pub consumer: Sender<LoadResponse>,
 }
 
 impl LoadData {
-    pub fn new(url: Url) -> LoadData {
+    pub fn new(url: Url, consumer: Sender<LoadResponse>) -> LoadData {
         LoadData {
             url: url,
             method: Get,
             headers: RequestHeaderCollection::new(),
             data: None,
             cors: None,
-            consumer: None,
+            consumer: consumer,
         }
     }
 }
@@ -165,7 +165,7 @@ pub fn start_sending_opt(senders: ResponseSenders, metadata: Metadata) -> Result
 pub fn load_whole_resource(resource_task: &ResourceTask, url: Url)
         -> Result<(Metadata, Vec<u8>), String> {
     let (start_chan, start_port) = channel();
-    resource_task.send(Load(LoadData::new(url), start_chan));
+    resource_task.send(Load(LoadData::new(url, start_chan)));
     let response = start_port.recv();
 
     let mut buf = vec!();
@@ -212,8 +212,8 @@ impl ResourceManager {
     fn start(&self) {
         loop {
             match self.from_client.recv() {
-              Load(load_data, start_chan) => {
-                self.load(load_data, start_chan)
+              Load(load_data) => {
+                self.load(load_data)
               }
               Exit => {
                 break
@@ -222,13 +222,12 @@ impl ResourceManager {
         }
     }
 
-    fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
+    fn load(&self, load_data: LoadData) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
-        load_data.consumer = Some(start_chan.clone());
         let senders = ResponseSenders {
             immediate_consumer: self.sniffer_task.clone(),
-            eventual_consumer: start_chan.clone(),
+            eventual_consumer: load_data.consumer.clone(),
         };
 
         let loader = match load_data.url.scheme.as_slice() {
@@ -252,7 +251,7 @@ impl ResourceManager {
 /// Load a URL asynchronously and iterate over chunks of bytes from the response.
 pub fn load_bytes_iter(resource_task: &ResourceTask, url: Url) -> (Metadata, ProgressMsgPortIterator) {
     let (input_chan, input_port) = channel();
-    resource_task.send(Load(LoadData::new(url), input_chan));
+    resource_task.send(Load(LoadData::new(url, input_chan)));
 
     let response = input_port.recv();
     let iter = ProgressMsgPortIterator { progress_port: response.progress_port };

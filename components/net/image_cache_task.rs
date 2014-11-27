@@ -443,7 +443,7 @@ impl ImageCacheTask {
 
 fn load_image_data(url: Url, resource_task: ResourceTask) -> Result<Vec<u8>, ()> {
     let (response_chan, response_port) = channel();
-    resource_task.send(resource_task::Load(LoadData::new(url), response_chan));
+    resource_task.send(resource_task::Load(LoadData::new(url, response_chan)));
 
     let mut image_data = vec!();
 
