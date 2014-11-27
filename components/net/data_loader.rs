@@ -27,7 +27,7 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
 
     let senders = ResponseSenders {
         immediate_consumer: start_chan,
-        eventual_consumer: load_data.consumer,
+        eventual_consumer: load_data.consumer.unwrap(),
     };
 
     // Split out content type and data.

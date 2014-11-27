@@ -14,7 +14,7 @@ use servo_util::resource_files::resources_dir_path;
 pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     let senders = ResponseSenders {
         immediate_consumer: start_chan.clone(),
-        eventual_consumer: load_data.consumer.clone(),
+        eventual_consumer: load_data.clone().consumer.unwrap(),
     };
     match load_data.url.non_relative_scheme_data().unwrap() {
         "blank" => {

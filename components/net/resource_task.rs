@@ -36,18 +36,18 @@ pub struct LoadData {
     pub headers: RequestHeaderCollection,
     pub data: Option<Vec<u8>>,
     pub cors: Option<ResourceCORSData>,
-    pub consumer: Sender<LoadResponse>,
+    pub consumer: Option<Sender<LoadResponse>>,
 }
 
 impl LoadData {
-    pub fn new(url: Url, consumer: Sender<LoadResponse>) -> LoadData {
+    pub fn new(url: Url) -> LoadData {
         LoadData {
             url: url,
             method: Get,
             headers: RequestHeaderCollection::new(),
             data: None,
             cors: None,
-            consumer: consumer,
+            consumer: None,
         }
     }
 }
@@ -225,7 +225,7 @@ impl ResourceManager {
     fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
-        load_data.consumer = start_chan.clone();
+        load_data.consumer = Some(start_chan.clone());
         let senders = ResponseSenders {
             immediate_consumer: self.sniffer_task.clone(),
             eventual_consumer: start_chan.clone(),
