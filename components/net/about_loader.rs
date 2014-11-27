@@ -12,14 +12,13 @@ use servo_util::resource_files::resources_dir_path;
 
 
 pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
+    let senders = ResponseSenders {
+        immediate_consumer: start_chan.clone(),
+        eventual_consumer: load_data.consumer.clone(),
+    };
     match load_data.url.non_relative_scheme_data().unwrap() {
         "blank" => {
-            let chan = start_sending(
-                ResponseSenders {
-                    tlr: start_chan,
-                    lr: load_data.next_rx.unwrap(),
-                },
-                Metadata {
+            let chan = start_sending(senders, Metadata {
                     final_url: load_data.url,
                     content_type: Some(("text".to_string(), "html".to_string())),
                     charset: Some("utf-8".to_string()),
@@ -38,12 +37,7 @@ pub fn factory(mut load_data: LoadData, start_chan: Sender<TargetedLoadResponse>
             load_data.url = Url::from_file_path(&path).unwrap();
         }
         _ => {
-            start_sending(
-                ResponseSenders {
-                    tlr: start_chan,
-                    lr: load_data.next_rx.unwrap(),
-                },
-                Metadata::default(load_data.url))
+            start_sending(senders, Metadata::default(load_data.url))
                 .send(Done(Err("Unknown about: URL.".to_string())));
             return
         }

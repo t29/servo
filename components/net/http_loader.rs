@@ -31,10 +31,10 @@ fn load(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     let mut iters = 0u;
     let mut url = load_data.url.clone();
     let mut redirected_to = HashSet::new();
-    
+
     let senders = ResponseSenders {
-        tlr: start_chan,
-        lr: load_data.next_rx.unwrap()
+        immediate_consumer: start_chan,
+        eventual_consumer: load_data.consumer
     };
 
     // Loop to handle redirects.

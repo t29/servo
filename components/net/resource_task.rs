@@ -36,18 +36,18 @@ pub struct LoadData {
     pub headers: RequestHeaderCollection,
     pub data: Option<Vec<u8>>,
     pub cors: Option<ResourceCORSData>,
-    pub next_rx: Option<Sender<LoadResponse>>
+    pub consumer: Sender<LoadResponse>,
 }
 
 impl LoadData {
-    pub fn new(url: Url) -> LoadData {
+    pub fn new(url: Url, consumer: Sender<LoadResponse>) -> LoadData {
         LoadData {
             url: url,
             method: Get,
             headers: RequestHeaderCollection::new(),
             data: None,
             cors: None,
-            next_rx: None
+            consumer: consumer,
         }
     }
 }
@@ -127,8 +127,8 @@ pub struct TargetedLoadResponse {
 
 // Data structure containing ports
 pub struct ResponseSenders {
-    pub tlr: Sender<TargetedLoadResponse>,
-    pub lr: Sender<LoadResponse>,
+    pub immediate_consumer: Sender<TargetedLoadResponse>,
+    pub eventual_consumer: Sender<LoadResponse>,
 }
 
 /// Messages sent in response to a `Load` message
@@ -148,12 +148,12 @@ pub fn start_sending(senders: ResponseSenders, metadata: Metadata) -> Sender<Pro
 /// For use by loaders in responding to a Load message.
 pub fn start_sending_opt(senders: ResponseSenders, metadata: Metadata) -> Result<Sender<ProgressMsg>, ()> {
     let (progress_chan, progress_port) = channel();
-    let result = senders.tlr.send_opt(TargetedLoadResponse {
+    let result = senders.immediate_consumer.send_opt(TargetedLoadResponse {
         load_response: LoadResponse {
             metadata:      metadata,
             progress_port: progress_port,
         },
-        consumer: senders.lr
+        consumer: senders.eventual_consumer
     });
     match result {
         Ok(_) => Ok(progress_chan),
@@ -225,7 +225,11 @@ impl ResourceManager {
     fn load(&self, load_data: LoadData, start_chan: Sender<LoadResponse>) {
         let mut load_data = load_data;
         load_data.headers.user_agent = self.user_agent.clone();
-        load_data.next_rx = Some(start_chan.clone());
+        load_data.consumer = start_chan.clone();
+        let senders = ResponseSenders {
+            immediate_consumer: self.sniffer_task.clone(),
+            eventual_consumer: start_chan.clone(),
+        };
 
         let loader = match load_data.url.scheme.as_slice() {
             "file" => file_loader::factory,
@@ -234,11 +238,7 @@ impl ResourceManager {
             "about" => about_loader::factory,
             _ => {
                 debug!("resource_task: no loader for scheme {:s}", load_data.url.scheme);
-                start_sending(ResponseSenders {
-                        tlr: self.sniffer_task.clone(),
-                        lr: start_chan.clone(),
-                    },
-                    Metadata::default(load_data.url))
+                start_sending(senders, Metadata::default(load_data.url))
                     .send(Done(Err("no loader for scheme".to_string())));
                 return
             }

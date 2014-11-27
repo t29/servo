@@ -32,12 +32,11 @@ fn read_all(reader: &mut io::Stream, progress_chan: &Sender<ProgressMsg>)
 pub fn factory(load_data: LoadData, start_chan: Sender<TargetedLoadResponse>) {
     let url = load_data.url;
     assert!("file" == url.scheme.as_slice());
-    let progress_chan = start_sending(
-        ResponseSenders {
-            tlr: start_chan,
-            lr: load_data.next_rx.unwrap(),
-        },
-        Metadata::default(url.clone())
+    let senders = ResponseSenders {
+        immediate_consumer: start_chan,
+        eventual_consumer: load_data.consumer,
+    };
+    let progress_chan = start_sending(senders, Metadata::default(url.clone())
     );
     spawn_named("file_loader", proc() {
         let file_path: Result<Path, ()> = url.to_file_path();
