@@ -5,7 +5,7 @@
 //! A task that sniffs data
 use std::comm::{channel, Receiver, Sender, Disconnected};
 use std::task::TaskBuilder;
-use resource_task::{TargetedLoadResponse};
+use resource_task::{TargetedLoadResponse, Payload, Done, LoadResponse};
 
 pub type SnifferTask = Sender<TargetedLoadResponse>;
 
@@ -35,14 +35,47 @@ impl SnifferManager {
         loop {
             match self.data_receiver.try_recv() {
                 Ok(snif_data) => {
-                    let result = snif_data.consumer.send_opt(snif_data.load_response);
+                    let mut resource_data = vec!();
+                    loop {
+                        match snif_data.load_response.progress_port.recv() {
+                            Payload(data) => {
+                                resource_data.push_all(data.as_slice());
+                            }
+                            Done(Ok(..)) => {
+                                break;
+                            }
+                            Done(Err(..)) => {
+                                break;
+                            }
+                        }
+                    }
+                    // We have all the data
+                    // Do the sniffing
+                    let (new_progress_chan, new_progress_port) = channel();
+
+                    let load_response = LoadResponse {
+                        progress_port: new_progress_port,
+                        metadata: snif_data.load_response.metadata,
+                    };
+                    // replace metadata
+
+                    let result = snif_data.consumer.send_opt(load_response);
                     if result.is_err() {
                         break;
                     }
+
+                    new_progress_chan.send(Payload(resource_data));
+                    new_progress_chan.send(Done(Ok(())));
+
+                    // for x in resource_data.iter() {
+                    //     println!("{}", x);
+                    // }
+
                 }
                 Err(Disconnected) => break,
                 Err(_) => (),
             }
         }
     }
+
 }
