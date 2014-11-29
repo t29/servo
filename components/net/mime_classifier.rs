@@ -160,7 +160,7 @@ impl BinaryOrPlaintextClassifier {
 }
 impl MIMEChecker for BinaryOrPlaintextClassifier {
     fn classify(&self, data: &Vec<u8>) -> Option<(String, String)> {
-        return ::as_string_option(self.classify_impl(data));
+        return as_string_option(self.classify_impl(data));
     }
 }
 struct GroupedClassifier {
@@ -346,11 +346,11 @@ impl FeedsClassifier {
 
 impl MIMEChecker for FeedsClassifier {
     fn classify(&self,data:&Vec<u8>) -> Option<(String, String)> {
-       return ::as_string_option(self.classify_impl(data));
+       return as_string_option(self.classify_impl(data));
     }
 }
 
-struct MIMEClassifier {
+pub struct MIMEClassifier {
    image_classifier: GroupedClassifier,
    audio_video_classifer: GroupedClassifier,
    scriptable_classifier: GroupedClassifier,
@@ -361,7 +361,7 @@ struct MIMEClassifier {
 }
 
 impl MIMEClassifier {
-    fn new()->MIMEClassifier {
+    pub fn new()->MIMEClassifier {
          //TODO These should be configured from a settings file
          //         and not hardcoded
          let ret = MIMEClassifier{
@@ -411,7 +411,7 @@ impl MIMEClassifier {
     fn is_html(tp:&str,sub_tp:&str) -> bool { return tp=="text" && sub_tp=="html"; }
 
     //Performs MIME Type Sniffing Algorithm (section 7)
-    fn classify(&self,
+    pub fn classify(&self,
                     no_sniff: bool,
                     check_for_apache_bug: bool,
                     supplied_type: &Option<(String,String)>,
