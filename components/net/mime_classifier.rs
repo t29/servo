@@ -186,90 +186,95 @@ struct GroupedClassifier {
    byte_matchers: Vec<Box<MIMEChecker + Send>>,
 }
 impl GroupedClassifier {
-    fn push(&mut self,checker:Box<MIMEChecker+Send>)
-    {
-        self.byte_matchers.push(checker);
-    }
-    fn new() -> GroupedClassifier {
-        GroupedClassifier{byte_matchers:Vec::new()}
-    }
     fn image_classifer() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::image_x_icon());
-        ret.push(box ByteMatcher::image_x_icon_cursor());
-        ret.push(box ByteMatcher::image_bmp());
-        ret.push(box ByteMatcher::image_gif89a());
-        ret.push(box ByteMatcher::image_gif87a());
-        ret.push(box ByteMatcher::image_webp());
-        ret.push(box ByteMatcher::image_png());
-        ret.push(box ByteMatcher::image_jpeg());
-
-        ret
+        GroupedClassifier {
+            byte_matchers: vec![
+                box ByteMatcher::image_x_icon() as Box<MIMEChecker+Send>,
+                box ByteMatcher::image_x_icon_cursor(),
+                box ByteMatcher::image_bmp(),
+                box ByteMatcher::image_gif89a(),
+                box ByteMatcher::image_gif87a(),
+                box ByteMatcher::image_webp(),
+                box ByteMatcher::image_png(),
+                box ByteMatcher::image_jpeg(),
+            ]
+        }
     }
     fn audio_video_classifer() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::video_webm());
-        ret.push(box ByteMatcher::audio_basic());
-        ret.push(box ByteMatcher::audio_aiff());
-        ret.push(box ByteMatcher::audio_mpeg());
-        ret.push(box ByteMatcher::application_ogg());
-        ret.push(box ByteMatcher::audio_midi());
-        ret.push(box ByteMatcher::video_avi());
-        ret.push(box ByteMatcher::audio_wave());
-        ret.byte_matchers.push(box Mp4Matcher);
-        ret
+        GroupedClassifier{
+            byte_matchers: vec![
+                box ByteMatcher::video_webm() as Box<MIMEChecker+Send>,
+                box ByteMatcher::audio_basic(),
+                box ByteMatcher::audio_aiff(),
+                box ByteMatcher::audio_mpeg(),
+                box ByteMatcher::application_ogg(),
+                box ByteMatcher::audio_midi(),
+                box ByteMatcher::video_avi(),
+                box ByteMatcher::audio_wave(),
+                box Mp4Matcher
+            ]
+        }
     }
     fn scriptable_classifier() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::text_html_doctype());
-        ret.push(box ByteMatcher::text_html_page());
-        ret.push(box ByteMatcher::text_html_head());
-        ret.push(box ByteMatcher::text_html_script());
-        ret.push(box ByteMatcher::text_html_iframe());
-        ret.push(box ByteMatcher::text_html_h1());
-        ret.push(box ByteMatcher::text_html_div());
-        ret.push(box ByteMatcher::text_html_font());
-        ret.push(box ByteMatcher::text_html_table());
-        ret.push(box ByteMatcher::text_html_a());
-        ret.push(box ByteMatcher::text_html_style());
-        ret.push(box ByteMatcher::text_html_title());
-        ret.push(box ByteMatcher::text_html_b());
-        ret.push(box ByteMatcher::text_html_body());
-        ret.push(box ByteMatcher::text_html_br());
-        ret.push(box ByteMatcher::text_html_p());
-        ret.push(box ByteMatcher::text_html_comment());
-        ret.push(box ByteMatcher::text_xml());
-        ret.push(box ByteMatcher::application_pdf());
-        ret
+        GroupedClassifier{
+            byte_matchers: vec![
+                box ByteMatcher::text_html_doctype() as Box<MIMEChecker+Send>,
+                box ByteMatcher::text_html_page(),
+                box ByteMatcher::text_html_head(),
+                box ByteMatcher::text_html_script(),
+                box ByteMatcher::text_html_iframe(),
+                box ByteMatcher::text_html_h1(),
+                box ByteMatcher::text_html_div(),
+                box ByteMatcher::text_html_font(),
+                box ByteMatcher::text_html_table(),
+                box ByteMatcher::text_html_a(),
+                box ByteMatcher::text_html_style(),
+                box ByteMatcher::text_html_title(),
+                box ByteMatcher::text_html_b(),
+                box ByteMatcher::text_html_body(),
+                box ByteMatcher::text_html_br(),
+                box ByteMatcher::text_html_p(),
+                box ByteMatcher::text_html_comment(),
+                box ByteMatcher::text_xml(),
+                box ByteMatcher::application_pdf()
+            ]
+        }
+            
     }
     fn plaintext_classifier() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::text_plain_utf_8_bom());
-        ret.push(box ByteMatcher::text_plain_utf_16le_bom());
-        ret.push(box ByteMatcher::text_plain_utf_16be_bom());
-        ret.push(box ByteMatcher::application_postscript());
-        ret
+        GroupedClassifier{
+            byte_matchers: vec![
+                box ByteMatcher::text_plain_utf_8_bom() as Box<MIMEChecker+Send>,
+                box ByteMatcher::text_plain_utf_16le_bom(),
+                box ByteMatcher::text_plain_utf_16be_bom(),
+                box ByteMatcher::application_postscript()
+            ]
+        }
     }
     fn archive_classifier() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::application_x_gzip());
-        ret.push(box ByteMatcher::application_zip());
-        ret.push(box ByteMatcher::application_x_rar_compressed());
-        ret
+        GroupedClassifier {
+            byte_matchers: vec![
+                box ByteMatcher::application_x_gzip() as Box<MIMEChecker+Send>,
+                box ByteMatcher::application_zip(),
+                box ByteMatcher::application_x_rar_compressed()
+            ]
+        }
     }
-    
+
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn font_classifier() -> GroupedClassifier {
-        let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::application_font_woff());
-        ret.push(box ByteMatcher::true_type_collection());
-        ret.push(box ByteMatcher::open_type());
-        ret.push(box ByteMatcher::true_type());
-        ret.push(box ByteMatcher::application_vnd_ms_font_object());
-        ret
+        GroupedClassifier {
+            byte_matchers: vec![
+                box ByteMatcher::application_font_woff() as Box<MIMEChecker+Send>,
+                box ByteMatcher::true_type_collection(),
+                box ByteMatcher::open_type(),
+                box ByteMatcher::true_type(),
+                box ByteMatcher::application_vnd_ms_font_object(),
+            ]
+        }
     }
 }
-
-
 impl MIMEChecker for GroupedClassifier {
    fn classify(&self,data:&Vec<u8>) -> Option<(String, String)> {
         for matcher in self.byte_matchers.iter()
@@ -401,9 +406,9 @@ impl MIMEClassifier {
         self.binary_or_plaintext.classify(data)
     }
     fn is_xml(tp:&str,sub_tp:&str) -> bool {
-      match (tp,sub_tp,sub_tp.slice_from(max(sub_tp.len() - "+xml".len(), 0))) {
-          (_,_,"+xml") | ("application","xml",_) | ("text","xml",_) => {true}
-          _ => {false}
+        match (tp,sub_tp,sub_tp.slice_from(max((sub_tp.len() as int) - ("+xml".len() as int), 0i) as uint)) {
+            (_,_,"+xml") | ("application","xml",_) | ("text","xml",_) => {true}
+            _ => {false}
       }
     }
     fn is_html(tp:&str,sub_tp:&str) -> bool { return tp=="text" && sub_tp=="html"; }
@@ -449,7 +454,7 @@ impl MIMEClassifier {
                          match (media_type,media_subtype) {
                              ("audio",_) | ("video",_) | ("application","ogg") => {
                                  let tp = self.audio_video_classifer.classify(data);
-                                 if tp.is_some() { tp;}
+                                 if tp.is_some() { return tp;}
                              }
                              _=> {}
                          }
@@ -832,6 +837,8 @@ impl ByteMatcher {
         }
     }
     //34 bytes followed by the string "LP", the Embedded OpenType signature.
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn application_vnd_ms_font_object()->ByteMatcher {
         ByteMatcher{
             pattern: b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
@@ -845,6 +852,8 @@ impl ByteMatcher {
         }
     }
     //4 bytes representing the version number 1.0, a TrueType signature.
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn true_type()->ByteMatcher {
         ByteMatcher{
             pattern: b"\x00\x01\x00\x00",
@@ -854,6 +863,8 @@ impl ByteMatcher {
         }
     }
     //The string "OTTO", the OpenType signature.
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn open_type()->ByteMatcher {
         ByteMatcher{
             pattern: b"OTTO",
@@ -863,6 +874,8 @@ impl ByteMatcher {
         }
     }
     // 	The string "ttcf", the TrueType Collection signature.
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn true_type_collection()->ByteMatcher {
         ByteMatcher{
             pattern: b"ttcf",
@@ -872,6 +885,8 @@ impl ByteMatcher {
         }
     }
     // 	The string "wOFF", the Web Open Font Format signature.
+    // TODO: Use this in font context classifier
+    #[allow(dead_code)]
     fn application_font_woff()->ByteMatcher {
         ByteMatcher{
             pattern: b"wOFF",
@@ -981,8 +996,9 @@ mod tests {
         let mut filename = Path::new("../../tests/content/parsable_mime/");
 
         filename.push(filename_orig);
-
         let classifier = MIMEClassifier::new();
+
+
 
         let mut file = File::open(&filename);
         let read_result = file.read_to_end();
@@ -1000,7 +1016,7 @@ mod tests {
                                 parsed_subtp);
                         }
                     }
-                    None=>{panic!("No classification found for {}",filename.as_str());}
+                    None=>{panic!("No classification found for {} with supplied type {}",filename.as_str(),supplied_type);}
                 }
             }
             Err(e) => {panic!("Couldn't read from file {} with error {}",filename.as_str(),e);}
@@ -1016,92 +1032,103 @@ mod tests {
         x.push(file);
         test_sniff_full(&x,type_string,subtype_string,supplied_type);
     }
-
+    #[cfg(test)]
+    fn test_sniff_classification_sup(file:&str,type_string:&'static str,subtype_string:&str) {
+        test_sniff_classification(file,type_string,subtype_string,None);
+        let class_type = Some((type_string,""));
+        test_sniff_classification(file,type_string,subtype_string,class_type);
+    }
+        
     #[test]
-    fn test_sniff_x_icon() { test_sniff_classification("test.ico","image","x-icon",None); }
-
-    #[test]
-    fn test_sniff_x_icon_cursor() {
-     test_sniff_classification("test_cursor.ico","image","x-icon",None);
+    fn test_sniff_x_icon() {
+        test_sniff_classification_sup("test.ico","image","x-icon");
     }
 
     #[test]
-    fn test_sniff_bmp() { test_sniff_classification("test.bmp","image","bmp",None); }
+    fn test_sniff_x_icon_cursor() {
+     test_sniff_classification_sup("test_cursor.ico","image","x-icon");
+    }
+
+    #[test]
+    fn test_sniff_bmp() {
+        test_sniff_classification_sup("test.bmp","image","bmp");
+    }
 
     #[test]
     fn test_sniff_gif87a() {
-        test_sniff_classification("test87a.gif","image","gif",None);
+        test_sniff_classification_sup("test87a.gif","image","gif");
     }
 
     #[test]
     fn test_sniff_gif89a() {
-        test_sniff_classification("test89a.gif","image","gif",None);
+        test_sniff_classification_sup("test89a.gif","image","gif");
     }
 
     #[test]
     fn test_sniff_webp() {
-        test_sniff_classification("test.webp","image","webp",None);
+        test_sniff_classification_sup("test.webp","image","webp");
     }
 
     #[test]
     fn test_sniff_png() {
-        test_sniff_classification("test.png","image","png",None);
+        test_sniff_classification_sup("test.png","image","png");
     }
 
     #[test]
     fn test_sniff_jpg() {
-        test_sniff_classification("test.jpg","image","jpeg",None);
+        test_sniff_classification_sup("test.jpg","image","jpeg");
     }
 
     #[test]
     fn test_sniff_webm() {
-        test_sniff_classification("test.webm","video","webm",None);
+        test_sniff_classification_sup("test.webm","video","webm");
     }
 
     #[test]
     fn test_sniff_mp4() {
-        test_sniff_classification("test.mp4","video","mp4",None);
+        test_sniff_classification_sup("test.mp4","video","mp4");
     }
 
     #[test]
     fn test_sniff_avi() {
-        test_sniff_classification("test.avi","video","avi",None);
+        test_sniff_classification_sup("test.avi","video","avi");
     }
 
     #[test]
     fn test_sniff_basic() {
-        test_sniff_classification("test.au","audio","basic",None);
+        test_sniff_classification_sup("test.au","audio","basic");
     }
 
     #[test]
     fn test_sniff_aiff() {
-        test_sniff_classification("test.aif","audio","aiff",None);
+        test_sniff_classification_sup("test.aif","audio","aiff");
     }
 
     #[test]
     fn test_sniff_mpeg() {
-        test_sniff_classification("test.mp3","audio","mpeg",None);
+        test_sniff_classification_sup("test.mp3","audio","mpeg");
     }
 
     #[test]
     fn test_sniff_midi() {
-        test_sniff_classification("test.mid","audio","midi",None);
+        test_sniff_classification_sup("test.mid","audio","midi");
     }
 
     #[test]
     fn test_sniff_wave() {
-        test_sniff_classification("test.wav","audio","wave",None);
+        test_sniff_classification_sup("test.wav","audio","wave");
     }
 
     #[test]
     fn test_sniff_ogg() {
         test_sniff_classification("small.ogg","application","ogg",None);
+        test_sniff_classification("small.ogg","application","ogg",Some(("audio","")));
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_vsn_ms_fontobject() {
-        test_sniff_classification("vnd.ms-fontobject","application","vnd.ms-fontobject",None);
+        test_sniff_classification_sup("vnd.ms-fontobject","application","vnd.ms-fontobject");
     }
 
     #[test]
@@ -1125,7 +1152,7 @@ mod tests {
     #[test]
     #[should_fail]
     fn test_sniff_woff() {
-        test_sniff_classification("test.wof","application","font-woff",None);
+        test_sniff_classification_sup("test.wof","application","font-woff");
     }
 
     #[test]
