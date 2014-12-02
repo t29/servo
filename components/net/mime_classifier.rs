@@ -53,10 +53,10 @@ struct ByteMatcher {
 }
 
 impl ByteMatcher {
-    fn matches(&self, data: &Vec<u8>) -> bool {
+    fn matches(&self, data: &Vec<u8>) -> Option<uint> {
 
         if data.len() < self.pattern.len() {
-            return false;
+            return None;
         }
         //TODO replace with iterators if I ever figure them out...
         let mut i = 0u;
@@ -67,21 +67,22 @@ impl ByteMatcher {
             if !self.leading_ignore.iter().any(|x| *x == data[i]) { break;}
 
             i=i + 1;
-            if i > max_i {return false;}
+            if i > max_i {return None;}
         }
-
-        for j in range(0u,self.pattern.len()) {            
-            if (data[i + j] & self.mask[j]) != (self.pattern[j] & self.mask[j]) { 
-                return false; 
+        for j in range(0u,self.pattern.len()) {
+//        for j in range(0u,self.pattern.len()) {            
+            if (data[i] & self.mask[j]) != (self.pattern[j] & self.mask[j]) { 
+                return None; 
             }
+            i = i + 1;
         }
-        true
+        Some(i)
     }
 }
 
 impl MIMEChecker for ByteMatcher {
     fn classify(&self, data:&Vec<u8>) -> Option<(String, String)> {
-        if self.matches(data) {
+        if self.matches(data).is_some() {
             Some((self.content_type.val0().to_string(),
               self.content_type.val1().to_string()))
         } else {
@@ -90,6 +91,24 @@ impl MIMEChecker for ByteMatcher {
     }
 }
 
+struct TagTerminatedByteMatcher {
+  matcher: ByteMatcher
+}
+
+impl MIMEChecker for TagTerminatedByteMatcher {
+    fn classify(&self, data:&Vec<u8>) -> Option<(String, String)> {
+       let pattern = self.matcher.matches(data);
+       if match pattern {
+         Some(j)=>{j < data.len() && (data[j]==b' ' || data[j]==b'>')}
+         _=>{false}
+       } {
+           Some((self.matcher.content_type.val0().to_string(),
+              self.matcher.content_type.val1().to_string()))
+       } else {
+           None
+       }
+    }
+}
 struct Mp4Matcher;
 
 impl Mp4Matcher {
@@ -202,40 +221,23 @@ impl GroupedClassifier {
     }
     fn scriptable_classifier() -> GroupedClassifier {
         let mut ret = GroupedClassifier::new();
-        ret.push(box ByteMatcher::text_html_doctype_20());
-        ret.push(box ByteMatcher::text_html_doctype_3e());
-        ret.push(box ByteMatcher::text_html_page_20());
-        ret.push(box ByteMatcher::text_html_page_3e());
-        ret.push(box ByteMatcher::text_html_head_20());
-        ret.push(box ByteMatcher::text_html_head_3e());
-        ret.push(box ByteMatcher::text_html_script_20());
-        ret.push(box ByteMatcher::text_html_script_3e());
-        ret.push(box ByteMatcher::text_html_iframe_20());
-        ret.push(box ByteMatcher::text_html_iframe_3e());
-        ret.push(box ByteMatcher::text_html_h1_20());
-        ret.push(box ByteMatcher::text_html_h1_3e());
-        ret.push(box ByteMatcher::text_html_div_20());
-        ret.push(box ByteMatcher::text_html_div_3e());
-        ret.push(box ByteMatcher::text_html_font_20());
-        ret.push(box ByteMatcher::text_html_font_3e());
-        ret.push(box ByteMatcher::text_html_table_20());
-        ret.push(box ByteMatcher::text_html_table_3e());
-        ret.push(box ByteMatcher::text_html_a_20());
-        ret.push(box ByteMatcher::text_html_a_3e());
-        ret.push(box ByteMatcher::text_html_style_20());
-        ret.push(box ByteMatcher::text_html_style_3e());
-        ret.push(box ByteMatcher::text_html_title_20());
-        ret.push(box ByteMatcher::text_html_title_3e());
-        ret.push(box ByteMatcher::text_html_b_20());
-        ret.push(box ByteMatcher::text_html_b_3e());
-        ret.push(box ByteMatcher::text_html_body_20());
-        ret.push(box ByteMatcher::text_html_body_3e());
-        ret.push(box ByteMatcher::text_html_br_20());
-        ret.push(box ByteMatcher::text_html_br_3e());
-        ret.push(box ByteMatcher::text_html_p_20());
-        ret.push(box ByteMatcher::text_html_p_3e());
-        ret.push(box ByteMatcher::text_html_comment_20());
-        ret.push(box ByteMatcher::text_html_comment_3e());
+        ret.push(box ByteMatcher::text_html_doctype());
+        ret.push(box ByteMatcher::text_html_page());
+        ret.push(box ByteMatcher::text_html_head());
+        ret.push(box ByteMatcher::text_html_script());
+        ret.push(box ByteMatcher::text_html_iframe());
+        ret.push(box ByteMatcher::text_html_h1());
+        ret.push(box ByteMatcher::text_html_div());
+        ret.push(box ByteMatcher::text_html_font());
+        ret.push(box ByteMatcher::text_html_table());
+        ret.push(box ByteMatcher::text_html_a());
+        ret.push(box ByteMatcher::text_html_style());
+        ret.push(box ByteMatcher::text_html_title());
+        ret.push(box ByteMatcher::text_html_b());
+        ret.push(box ByteMatcher::text_html_body());
+        ret.push(box ByteMatcher::text_html_br());
+        ret.push(box ByteMatcher::text_html_p());
+        ret.push(box ByteMatcher::text_html_comment());
         ret.push(box ByteMatcher::text_xml());
         ret.push(box ByteMatcher::application_pdf());
         ret
@@ -464,55 +466,53 @@ impl MIMEClassifier {
 impl ByteMatcher {
     //A Windows Icon signature
     fn image_x_icon()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x00u8, 0x00u8, 0x01u8, 0x00u8]; P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"\x00\x00\x01\x00",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("image","x-icon"),
             leading_ignore: []}
     }
     //A Windows Cursor signature.
     fn image_x_icon_cursor()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x00u8, 0x00u8, 0x02u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"\x00\x00\x02\x00",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("image","x-icon"),
             leading_ignore: []
         }
     }
     //The string "BM", a BMP signature.
     fn image_bmp()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x42u8, 0x4Du8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"BM",
+            mask: b"\xFF\xFF",
             content_type: ("image","bmp"),
             leading_ignore: []
         }
     }
-    //The string "GIF87a", a GIF signature.
+    //The string "GIF89a", a GIF signature.
     fn image_gif89a()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x47u8, 0x49u8, 0x46u8, 0x38u8, 0x39u8, 0x61u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"GIF89a",
+            mask: b"\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("image","gif"),
             leading_ignore: []
         }
     }
-    //The string "GIF89a", a GIF signature.
+    //The string "GIF87a", a GIF signature.
     fn image_gif87a()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x47u8, 0x49u8, 0x46u8, 0x38u8, 0x37u8, 0x61u8]; P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"GIF87a",
+            mask: b"\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("image","gif"),
             leading_ignore: []
         }
     }
     //The string "RIFF" followed by four bytes followed by the string "WEBPVP".
     fn image_webp()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x52u8, 0x49u8, 0x46u8, 0x46u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-              0x57u8, 0x45u8, 0x42u8, 0x50u8, 0x56u8, 0x50u8]; P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-              0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"RIFF\x00\x00\x00\x00WEBPVP",
+            mask: b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00,\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("image","webp"),
             leading_ignore: []
         }
@@ -520,63 +520,63 @@ impl ByteMatcher {
     //An error-checking byte followed by the string "PNG" followed by CR LF SUB LF, the PNG
     //signature.
     fn image_png()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x89u8, 0x50u8, 0x4Eu8, 0x47u8, 0x0Du8, 0x0Au8, 0x1Au8, 0x0Au8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"\x89PNG\r\n\x1A\n",
+            mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("image","png"),
             leading_ignore: []
         }
     }
     // 	The JPEG Start of Image marker followed by the indicator byte of another marker.
     fn image_jpeg()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0xFFu8, 0xD8u8, 0xFFu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"\xFF\xD8\xFF",
+            mask: b"\xFF\xFF\xFF",
             content_type: ("image","jpeg"),
             leading_ignore: []
         }
     }
     //The WebM signature. [TODO: Use more bytes?]
     fn video_webm()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x1Au8, 0x45u8, 0xDFu8, 0xA3u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"\x1A\x45\xDF\xA3",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("video","webm"),
             leading_ignore: []
         }
     }
     //The string ".snd", the basic audio signature.
     fn audio_basic()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x2Eu8, 0x73u8, 0x6Eu8, 0x64u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b".snd",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("audio","basic"),
             leading_ignore: []
         }
     }
     //The string "FORM" followed by four bytes followed by the string "AIFF", the AIFF signature.
     fn audio_aiff()->ByteMatcher {
-        return ByteMatcher{
-            pattern:  {static P:&'static[u8] = &[0x46u8, 0x4Fu8, 0x52u8, 0x4Du8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x41u8, 0x49u8, 0x46u8, 0x46u8];P},
-            mask:  {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern:  b"FORM\x00\x00\x00\x00AIFF",
+            mask:  b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
             content_type: ("audio","aiff"),
             leading_ignore: []
         }
     }
     //The string "ID3", the ID3v2-tagged MP3 signature.
     fn audio_mpeg()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x49u8, 0x44u8, 0x33u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"ID3",
+            mask: b"\xFF\xFF\xFF",
             content_type: ("audio","mpeg"),
             leading_ignore: []
         }
     }
     //The string "OggS" followed by NUL, the Ogg container signature.
     fn application_ogg()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x4Fu8, 0x67u8, 0x67u8, 0x53u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"OggS",
+            mask: b"\xFF\xFF\xFF\xFF\xFF",
             content_type: ("application","ogg"),
             leading_ignore: []
         }
@@ -584,477 +584,361 @@ impl ByteMatcher {
     //The string "MThd" followed by four bytes representing the number 6 in 32 bits (big-endian),
     //the MIDI signature.
     fn audio_midi()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x4Du8, 0x54u8, 0x68u8, 0x64u8, 0x00u8, 0x00u8, 0x00u8, 0x06u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"MThd\x00\x00\x00\x06",
+            mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("audio","midi"),
             leading_ignore: []
         }
     }
     //The string "RIFF" followed by four bytes followed by the string "AVI ", the AVI signature.
     fn video_avi()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x52u8, 0x49u8, 0x46u8, 0x46u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x41u8, 0x56u8, 0x49u8, 0x20u8]; P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"RIFF\x00\x00\x00\x00AVI ",
+            mask: b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
             content_type: ("video","avi"),
             leading_ignore: []
         }
     }
     // 	The string "RIFF" followed by four bytes followed by the string "WAVE", the WAVE signature.
     fn audio_wave()->ByteMatcher {
-        return ByteMatcher{
-            pattern:  {static P:&'static[u8] = &[0x52u8, 0x49u8, 0x46u8, 0x46u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x57u8, 0x41u8, 0x56u8, 0x45u8];P},
-            mask:  {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern:  b"RIFF\x00\x00\x00\x00WAVE",
+            mask:  b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
             content_type: ("audio","wave"),
             leading_ignore: []
         }
     }
-    // doctype terminated with Tag terminating (TT) Byte: 0x20 (SP)
-    fn text_html_doctype_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern:  {static P:&'static[u8] = &[0x3Cu8, 0x21u8, 0x44u8, 0x4Fu8, 0x43u8, 0x54u8, 0x59u8, 0x50u8,
-                0x45u8, 0x20u8, 0x48u8, 0x54u8, 0x4Du8, 0x4Cu8, 0x20u8]; P},
-            mask:  {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8,
-                0xDFu8, 0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+    // doctype terminated with Tag terminating (TT) Byte
+    fn text_html_doctype()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern:  b"<!DOCTYPE HTML",
+                mask:  b"\xFF\xFF\xDF\xDF\xDF\xDF\xDF\xDF\xDF\xFF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+           }
         }
     }
-    // doctype terminated with Tag terminating (TT) Byte: 0x3E (">")
-    fn text_html_doctype_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x21u8, 0x44u8, 0x4Fu8, 0x43u8, 0x54u8, 0x59u8, 0x50u8,
-                0x45u8, 0x20u8, 0x48u8, 0x54u8, 0x4Du8, 0x4Cu8, 0x3Eu8]; P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8,
-                0xDFu8, 0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
+
     // HTML terminated with Tag terminating (TT) Byte: 0x20 (SP)
-    fn text_html_page_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x54u8, 0x4Du8, 0x4Cu8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+    fn text_html_page()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<HTML",
+                mask: b"\xFF\xDF\xDF\xDF\xDF\xFF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // HTML terminated with Tag terminating (TT) Byte: 0x3E (">")
-    fn text_html_page_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x54u8, 0x4Du8, 0x4Cu8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // head terminated with Tag Terminating (TT) Byte
+    fn text_html_head()->TagTerminatedByteMatcher {
+         TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<HEAD",
+                mask: b"\xFF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // head terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_head_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x45u8, 0x41u8, 0x44u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // script terminated with Tag Terminating (TT) Byte
+    fn text_html_script()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher {
+                pattern: b"<SCRIPT",
+                mask: b"\xFF\xDF\xDF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore: b"\t\n\x0C\r "
+            }
         }
     }
-    // head terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_head_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x45u8, 0x41u8, 0x44u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // iframe terminated with Tag Terminating (TT) Byte
+    fn text_html_iframe()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<IFRAME",
+                mask: b"\xFF\xDF\xDF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore: b"\t\n\x0C\r "
+            }
         }
     }
-    // script terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_script_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x53u8, 0x43u8, 0x52u8, 0x49u8, 0x50u8, 0x54u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // h1 terminated with Tag Terminating (TT) Byte
+    fn text_html_h1()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<H1",
+                mask: b"\xFF\xDF\xFF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // script terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_script_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x53u8, 0x43u8, 0x52u8, 0x49u8, 0x50u8, 0x54u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // div terminated with Tag Terminating (TT) Byte
+    fn text_html_div()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<DIV",
+                mask: b"\xFF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // iframe terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_iframe_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x49u8, 0x46u8, 0x52u8, 0x41u8, 0x4Du8, 0x45u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // font terminated with Tag Terminating (TT) Byte
+    fn text_html_font()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<FONT",
+                mask: b"\xFF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // iframe terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_iframe_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x49u8, 0x46u8, 0x52u8, 0x41u8, 0x4Du8, 0x45u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
+
+    // table terminated with Tag Terminating (TT) Byte
+    fn text_html_table()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+            pattern: b"<TABLE",
+            mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
             content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+            leading_ignore: b"\t\n\x0C\r "
+            }
         }
     }
-    // h1 terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_h1_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x31u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // a terminated with Tag Terminating (TT) Byte
+    fn text_html_a()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<A",
+                mask: b"\xFF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // h1 terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_h1_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x48u8, 0x31u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // style terminated with Tag Terminating (TT) Byte
+    fn text_html_style()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<STYLE",
+                mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // div terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_div_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x44u8, 0x49u8, 0x56u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // title terminated with Tag Terminating (TT) Byte
+    fn text_html_title()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<TITLE",
+                mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // div terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_div_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x44u8, 0x49u8, 0x56u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // b terminated with Tag Terminating (TT) Byte
+    fn text_html_b()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<B",
+                mask: b"\xFF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // font terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_font_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x46u8, 0x4Fu8, 0x4Eu8, 0x54u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // body terminated with Tag Terminating (TT) Byte
+    fn text_html_body()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<BODY",
+                mask: b"\xFF\xDF\xDF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // font terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_font_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x46u8, 0x4Fu8, 0x4Eu8, 0x54u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // br terminated with Tag Terminating (TT) Byte
+    fn text_html_br()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<BR",
+                mask: b"\xFF\xDF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // table terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_table_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x54u8, 0x41u8, 0x42u8, 0x4Cu8, 0x45u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // p terminated with Tag Terminating (TT) Byte
+    fn text_html_p()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<P",
+                mask: b"\xFF\xDF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // table terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_table_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x54u8, 0x41u8, 0x42u8, 0x4Cu8, 0x45u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+
+    // comment terminated with Tag Terminating (TT) Byte
+    fn text_html_comment()->TagTerminatedByteMatcher {
+        TagTerminatedByteMatcher {
+            matcher: ByteMatcher{
+                pattern: b"<!--",
+                mask: b"\xFF\xFF\xFF\xFF",
+                content_type: ("text","html"),
+                leading_ignore:  b"\t\n\x0C\r "
+            }
         }
     }
-    // a terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_a_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x41u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // a terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_a_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x41u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // style terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_style_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x53u8, 0x54u8, 0x59u8, 0x4Cu8, 0x45u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // style terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_style_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x53u8, 0x54u8, 0x59u8, 0x4Cu8, 0x45u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // title terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_title_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x54u8, 0x49u8, 0x54u8, 0x4Cu8, 0x45u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // title terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_title_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x54u8, 0x49u8, 0x54u8, 0x4Cu8, 0x45u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // b terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_b_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // b terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_b_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // body terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_body_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x4Fu8, 0x44u8, 0x59u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // body terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_body_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x4Fu8, 0x44u8, 0x59u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // br terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_br_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x52u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // br terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_br_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x42u8, 0x52u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // p terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_p_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x50u8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // p terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_p_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x50u8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xDFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // comment terminated with Tag Terminating (TT) Byte: 0x20 (SP)
-    fn text_html_comment_20()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x21u8, 0x2Du8, 0x2Du8, 0x20u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
-    // comment terminated with Tag Terminating (TT) Byte: 0x3E (">")
-    fn text_html_comment_3e()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x21u8, 0x2Du8, 0x2Du8, 0x3Eu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
-            content_type: ("text","html"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
-        }
-    }
+
     //The string "<?xml".
     fn text_xml()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x3Cu8, 0x3Fu8, 0x78u8, 0x6Du8, 0x6Cu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"<?xml",
+            mask: b"\xFF\xFF\xFF\xFF\xFF",
             content_type: ("text","xml"),
-            leading_ignore:  {static P:&'static[u8] = &[0x09u8, 0x0Au8, 0x0Cu8, 0x0Du8, 0x20u8]; P}
+            leading_ignore: b"\t\n\x0C\r "
      }
     }
     //The string "%PDF-", the PDF signature.
     fn application_pdf()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x25u8, 0x50u8, 0x44u8, 0x46u8, 0x2Du8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"%PDF",
+            mask: b"\xFF\xFF\xFF\xFF\xFF",
             content_type: ("application","pdf"),
             leading_ignore: []
         }
     }
     //34 bytes followed by the string "LP", the Embedded OpenType signature.
     fn application_vnd_ms_font_object()->ByteMatcher {
-        return ByteMatcher{
-            pattern:  {static P:&'static[u8] = &[0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x4Cu8, 0x50u8];P},
-            mask: { static P:&'static[u8] = &[0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8,
-                0x00u8, 0x00u8, 0xFFu8, 0xFFu8];P},
+        ByteMatcher{
+            pattern: b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                       \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                       \x00\x00LP",
+            mask: b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                    \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                    \x00\x00\xFF\xFF",
             content_type: ("application","vnd.ms-fontobject"),
             leading_ignore: []
         }
     }
     //4 bytes representing the version number 1.0, a TrueType signature.
     fn true_type()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x00u8, 0x01u8, 0x00u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"\x00\x01\x00\x00",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("(TrueType)",""),
             leading_ignore: []
         }
     }
     //The string "OTTO", the OpenType signature.
     fn open_type()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x4Fu8, 0x54u8, 0x54u8, 0x4Fu8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"OTTO",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("(OpenType)",""),
             leading_ignore: []
         }
     }
     // 	The string "ttcf", the TrueType Collection signature.
     fn true_type_collection()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x74u8, 0x74u8, 0x63u8, 0x66u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"ttcf",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("(TrueType Collection)",""),
             leading_ignore: []
         }
     }
     // 	The string "wOFF", the Web Open Font Format signature.
     fn application_font_woff()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x77u8, 0x4Fu8, 0x46u8, 0x46u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"wOFF",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("application","font-woff"),
             leading_ignore: []
         }
     }
     //The GZIP archive signature.
     fn application_x_gzip()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x1Fu8, 0x8Bu8, 0x08u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"\x1F\x8B\x08",
+            mask: b"\xFF\xFF\xFF",
             content_type: ("application","x-gzip"),
             leading_ignore: []
         }
     }
     //The string "PK" followed by ETX EOT, the ZIP archive signature.
     fn application_zip()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x50u8, 0x4Bu8, 0x03u8, 0x04u8];P},
-         mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"PK\x03\x04",
+            mask: b"\xFF\xFF\xFF\xFF",
             content_type: ("application","zip"),
             leading_ignore: []
         }
     }
     //The string "Rar " followed by SUB BEL NUL, the RAR archive signature.
     fn application_x_rar_compressed()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0x52u8, 0x61u8, 0x72u8, 0x20u8, 0x1Au8, 0x07u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"Rar \x1A\x07\x00",
+            mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("application","x-rar-compressed"),
             leading_ignore: []
         }
     }
     // 	The string "%!PS-Adobe-", the PostScript signature.
     fn application_postscript()->ByteMatcher {
-        return ByteMatcher{
-            pattern:  {static P:&'static[u8] = &[0x25u8, 0x21u8, 0x50u8, 0x53u8, 0x2Du8, 0x41u8, 0x64u8, 0x6Fu8,
-                0x62u8, 0x65u8, 0x2Du8]; P},
-            mask:  {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8, 0xFFu8,
-                0xFFu8, 0xFFu8, 0xFFu8]; P},
+        ByteMatcher{
+            pattern: b"%!PS-Adobe-",
+            mask:  b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
             content_type: ("application","postscript"),
             leading_ignore: []
         }
     }
     // 	UTF-16BE BOM
     fn text_plain_utf_16be_bom()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0xFEu8, 0xFFu8, 0x00u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0x00u8, 0x00u8]; P},
+        ByteMatcher{
+            pattern: b"\xFE\xFF\x00\x00",
+            mask: b"\xFF\xFF\x00\x00",
             content_type: ("text","plain"),
             leading_ignore: []
         }
     }
     //UTF-16LE BOM
     fn text_plain_utf_16le_bom()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0xFFu8, 0xFEu8, 0x00u8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0x00u8, 0x00u8]; P},
+        ByteMatcher{
+            pattern: b"\xFF\xFE\x00\x00",
+            mask: b"\xFF\xFF\x00\x00",
             content_type: ("text","plain"),
             leading_ignore: []
         }
     }
     //UTF-8 BOM
     fn text_plain_utf_8_bom()->ByteMatcher {
-        return ByteMatcher{
-            pattern: {static P:&'static[u8] = &[0xEFu8, 0xBBu8, 0xBFu8, 0x00u8];P},
-            mask: {static P:&'static[u8] = &[0xFFu8, 0xFFu8, 0xFFu8, 0x00u8]; P},
+        ByteMatcher{
+            pattern: b"\xEF\xBB\xBF\x00",
+            mask: b"\xFF\xFF\xFF\x00",
             content_type: ("text","plain"),
             leading_ignore: []
         }
