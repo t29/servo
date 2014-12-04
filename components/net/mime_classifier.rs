@@ -3,22 +3,138 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cmp::max;
 
-fn as_string_option(tup:Option<(&'static str, &'static str)>) -> Option<(String,String)> {
-    match tup {
-        None => {None}
-        Some(tp) => {Some((tp.ref0().to_string(),tp.ref1().to_string()))}
+pub struct MIMEClassifier {
+   image_classifier: GroupedClassifier,
+   audio_video_classifer: GroupedClassifier,
+   scriptable_classifier: GroupedClassifier,
+   plaintext_classifier: GroupedClassifier,
+   archive_classifer: GroupedClassifier,
+   binary_or_plaintext: BinaryOrPlaintextClassifier,
+   feeds_classifier: FeedsClassifier
+}
+
+impl MIMEClassifier {
+    //Performs MIME Type Sniffing Algorithm (section 7)
+    pub fn classify(&self,
+                    no_sniff: bool,
+                    check_for_apache_bug: bool,
+                    supplied_type: &Option<(String, String)>,
+                    data: &Vec<u8>) -> Option<(String, String)> {
+
+        match *supplied_type{
+            None => {
+              return self.sniff_unknown_type(!no_sniff, data);
+            }
+            Some(ref tup) => {
+                let media_type = tup.ref0().as_slice();
+                let media_subtype = tup.ref1().as_slice();
+                match  (media_type, media_subtype) {
+                    ("uknown", "unknown") | ("application", "uknown") | ("*", "*") => {
+                        return self.sniff_unknown_type(!no_sniff,data);
+                    }
+                    _ => {
+                        if no_sniff {return supplied_type.clone();}
+                        if check_for_apache_bug {
+                          return self.sniff_text_or_data(data);
+                        }
+
+                        if MIMEClassifier::is_xml(media_type, media_subtype) { 
+                          return supplied_type.clone(); 
+                        }
+                        //Inplied in section 7.3, but flow is not clear
+                        if MIMEClassifier::is_html(media_type, media_subtype) { 
+                            return self.feeds_classifier.classify(data).
+                              or(supplied_type.clone()); 
+                         }
+
+                         if media_type == "image" {
+                           let tp = self.image_classifier.classify(data);
+                           if tp.is_some() { return tp;}
+                         }
+
+                         match (media_type,media_subtype) {
+                             ("audio", _) | ("video", _) | ("application", "ogg") => {
+                                 let tp = self.audio_video_classifer.classify(data);
+                                 if tp.is_some() { return tp;}
+                             }
+                             _ => {}
+                         }
+                    }
+                }
+            }
+        }
+        return supplied_type.clone();
+    } 
+
+    pub fn new()->MIMEClassifier {
+         MIMEClassifier{
+             image_classifier: GroupedClassifier::image_classifer(),
+             audio_video_classifer: GroupedClassifier::audio_video_classifer(),
+             scriptable_classifier: GroupedClassifier::scriptable_classifier(),
+             plaintext_classifier: GroupedClassifier::plaintext_classifier(),
+             archive_classifer: GroupedClassifier::archive_classifier(),
+             binary_or_plaintext: BinaryOrPlaintextClassifier,
+             feeds_classifier: FeedsClassifier
+         }
+    }
+    //some sort of iterator over the classifiers might be better?
+    fn sniff_unknown_type(&self, sniff_scriptable: bool, data: &Vec<u8>) ->
+      Option<(String,String)> {
+        if sniff_scriptable {
+            let tp = self.scriptable_classifier.classify(data);
+            if tp.is_some() {return tp;}
+        }
+
+        let tp = self.plaintext_classifier.classify(data);
+        if tp.is_some() {return tp;}
+
+        let tp = self.image_classifier.classify(data);
+        if tp.is_some() {return tp;}
+
+        let tp = self.audio_video_classifer.classify(data);
+        if tp.is_some() {return tp;}
+
+        let tp = self.archive_classifer.classify(data);
+        if tp.is_some() {return tp;}
+
+        self.binary_or_plaintext.classify(data)
+    }
+
+    fn sniff_text_or_data(&self, data: &Vec<u8>) -> Option<(String, String)> {
+        self.binary_or_plaintext.classify(data)
+    }
+    fn is_xml(tp: &str, sub_tp: &str) -> bool {
+        match (tp,sub_tp, sub_tp.slice_from(max((sub_tp.len() as int) - ("+xml".len() as int), 0i) as uint)) {
+            (_, _, "+xml") | ("application", "xml",_) | ("text", "xml",_) => {true}
+            _ => {false}
+      }
+    }
+    fn is_html(tp: &str, sub_tp: &str) -> bool {
+        return tp=="text" && sub_tp=="html";
     }
 }
 
+fn as_string_option(tup: Option<(&'static str, &'static str)>) -> Option<(String,String)> {
+    match tup {
+        None => {
+            None
+        }
+        Some(tp) => {
+            Some((tp.ref0().to_string(), tp.ref1().to_string()))
+        }
+    }
+}
+
+//Interface used for composite types
 trait MIMEChecker {
-    fn classify(&self, data:&Vec<u8>)->Option<(String, String)>;
+    fn classify(&self, data: &Vec<u8>)->Option<(String, String)>;
 }
 
 trait Matches {
-    fn matches(&mut self, matches:&[u8])->bool;
+    fn matches(&mut self, matches: &[u8])->bool;
 }
 
-impl <'a, T: Iterator<&'a u8>+Clone> Matches for T {
+impl <'a, T: Iterator<&'a u8> + Clone> Matches for T {
 
     // Matching function that works on an iterator.
     // see if the next matches.len() bytes in data_iterator equal matches
@@ -63,14 +179,12 @@ impl ByteMatcher {
         let max_i = data.len()-self.pattern.len();
 
         loop {
-
             if !self.leading_ignore.iter().any(|x| *x == data[i]) { break;}
 
             i=i + 1;
             if i > max_i {return None;}
         }
-        for j in range(0u,self.pattern.len()) {
-//        for j in range(0u,self.pattern.len()) {            
+        for j in range(0u,self.pattern.len()) {           
             if (data[i] & self.mask[j]) != (self.pattern[j] & self.mask[j]) { 
                 return None; 
             }
@@ -81,7 +195,7 @@ impl ByteMatcher {
 }
 
 impl MIMEChecker for ByteMatcher {
-    fn classify(&self, data:&Vec<u8>) -> Option<(String, String)> {
+    fn classify(&self, data: &Vec<u8>) -> Option<(String, String)> {
         if self.matches(data).is_some() {
             Some((self.content_type.val0().to_string(),
               self.content_type.val1().to_string()))
@@ -96,11 +210,13 @@ struct TagTerminatedByteMatcher {
 }
 
 impl MIMEChecker for TagTerminatedByteMatcher {
-    fn classify(&self, data:&Vec<u8>) -> Option<(String, String)> {
+    fn classify(&self, data: &Vec<u8>) -> Option<(String, String)> {
        let pattern = self.matcher.matches(data);
        if match pattern {
-         Some(j)=>{j < data.len() && (data[j]==b' ' || data[j]==b'>')}
-         _=>{false}
+             Some(j) => {j < data.len() && (data[j] == b' ' || data[j] == b'>')}
+             _ => {
+                 false
+             }
        } {
            Some((self.matcher.content_type.val0().to_string(),
               self.matcher.content_type.val1().to_string()))
@@ -112,11 +228,13 @@ impl MIMEChecker for TagTerminatedByteMatcher {
 struct Mp4Matcher;
 
 impl Mp4Matcher {
-    fn matches(&self,data:&Vec<u8>) -> bool {
+    fn matches(&self,data: &Vec<u8>) -> bool {
         if data.len() < 12 {return false;}
         let box_size = ((data[0] as u32) << 3 | (data[1] as u32) << 2 |
           (data[2] as u32) << 1 | (data[3] as u32)) as uint;
-        if (data.len() < box_size) || (box_size % 4 != 0) {return false;}
+        if (data.len() < box_size) || (box_size % 4 != 0) {
+            return false;
+        }
         //TODO replace with iterators
         let ftyp = [0x66, 0x74, 0x79, 0x70];
         let mp4 =  [0x6D, 0x70, 0x34];
@@ -128,9 +246,15 @@ impl Mp4Matcher {
         }
         let mut all_match = true;
         for i in range(8u,11u) {
-            if data[i]!=mp4[i - 8u] {all_match = false; break;}
+            if data[i]!=mp4[i - 8u] {
+                all_match = false;
+                break;
+            }
         }
-        if all_match {return true;}
+        if all_match {
+            return true;
+        }
+
         let mut bytes_read = 16u;
 
         while bytes_read < box_size {
@@ -138,7 +262,10 @@ impl Mp4Matcher {
             for i in range(0u,3u) {
                 if mp4[i] != data[i + bytes_read] {all_match = false; break;}
             }
-            if all_match {return true;}
+            if all_match {
+                return true;
+            }
+
             bytes_read=bytes_read + 4;
         }
         false
@@ -146,7 +273,7 @@ impl Mp4Matcher {
 
 }
 impl MIMEChecker for Mp4Matcher {
-    fn classify(&self, data:&Vec<u8>) -> Option<(String,String)> {
+    fn classify(&self, data: &Vec<u8>) -> Option<(String,String)> {
         if self.matches(data) {
             Some(("video".to_string(), "mp4".to_string()))
         } else {
@@ -164,16 +291,16 @@ impl BinaryOrPlaintextClassifier {
             (data[0] == 0xFEu8 && data[1] == 0xFFu8)) ||
            (data.len() >= 3 && data[0] == 0xEFu8 && data[1] == 0xBBu8 && data[2] == 0xBFu8)
         {
-            Some(("text","plain"))
+            Some(("text", "plain"))
         }
         else if data.iter().any(|x| *x<=0x08u8 ||
                                  *x==0x0Bu8 ||
                                  (*x>=0x0Eu8 && *x <= 0x1Au8) ||
                                  (*x>=0x1Cu8 && *x <= 0x1Fu8)) {
-            Some(("application","octet-stream"))
+            Some(("application", "octet-stream"))
         }
         else {
-            Some(("text","plain"))
+            Some(("text", "plain"))
         }
     }
 }
@@ -276,7 +403,7 @@ impl GroupedClassifier {
     }
 }
 impl MIMEChecker for GroupedClassifier {
-   fn classify(&self,data:&Vec<u8>) -> Option<(String, String)> {
+   fn classify(&self,data: &Vec<u8>) -> Option<(String, String)> {
         for matcher in self.byte_matchers.iter()
         {
             let sniffed_type = matcher.classify(data);
@@ -288,7 +415,7 @@ impl MIMEChecker for GroupedClassifier {
 
 struct FeedsClassifier;
 impl FeedsClassifier {
-    fn classify_impl(&self,data:&Vec<u8>) -> Option<(&'static str,&'static str)> {
+    fn classify_impl(&self,data: &Vec<u8>) -> Option<(&'static str,&'static str)> {
         let length = data.len();
         let mut data_iterator = data.iter();
 
@@ -328,17 +455,17 @@ impl FeedsClassifier {
                 return Some(("application", "rss+xml"));
             } else if data_iterator.matches(b"feed") {
                 return Some(("application", "atom+xml"));
-            } else if data_iterator.matches(b"rdf:RDF") {
+            } else if data_iterator.matches(b"rdf: RDF") {
                 while !data_iterator.next().is_none() {
-                    if data_iterator.matches(b"http://purl.org/rss/1.0/") {
+                    if data_iterator.matches(b"http: //purl.org/rss/1.0/") {
                         while !data_iterator.next().is_none() {
-                            if data_iterator.matches(b"http://www.w3.org/1999/02/22-rdf-syntax-ns#") {
+                            if data_iterator.matches(b"http: //www.w3.org/1999/02/22-rdf-syntax-ns#") {
                                 return Some(("application", "rss+xml"));
                             }
                         }
-                    } else if data_iterator.matches(b"http://www.w3.org/1999/02/22-rdf-syntax-ns#") {
+                    } else if data_iterator.matches(b"http: //www.w3.org/1999/02/22-rdf-syntax-ns#") {
                         while !data_iterator.next().is_none() {
-                            if data_iterator.matches(b"http://purl.org/rss/1.0/") {
+                            if data_iterator.matches(b"http: //purl.org/rss/1.0/") {
                                 return Some(("application", "rss+xml"));
                             }
                         }
@@ -352,117 +479,8 @@ impl FeedsClassifier {
 }
 
 impl MIMEChecker for FeedsClassifier {
-    fn classify(&self,data:&Vec<u8>) -> Option<(String, String)> {
+    fn classify(&self,data: &Vec<u8>) -> Option<(String, String)> {
        as_string_option(self.classify_impl(data))
-    }
-}
-
-pub struct MIMEClassifier {
-   image_classifier: GroupedClassifier,
-   audio_video_classifer: GroupedClassifier,
-   scriptable_classifier: GroupedClassifier,
-   plaintext_classifier: GroupedClassifier,
-   archive_classifer: GroupedClassifier,
-   binary_or_plaintext: BinaryOrPlaintextClassifier,
-   feeds_classifier: FeedsClassifier
-}
-
-impl MIMEClassifier {
-    pub fn new()->MIMEClassifier {
-         MIMEClassifier{
-             image_classifier: GroupedClassifier::image_classifer(),
-             audio_video_classifer: GroupedClassifier::audio_video_classifer(),
-             scriptable_classifier: GroupedClassifier::scriptable_classifier(),
-             plaintext_classifier: GroupedClassifier::plaintext_classifier(),
-             archive_classifer: GroupedClassifier::archive_classifier(),
-             binary_or_plaintext: BinaryOrPlaintextClassifier,
-             feeds_classifier: FeedsClassifier
-         }
-    }
-    //some sort of iterator over the classifiers might be better?
-    fn sniff_unknown_type(&self, sniff_scriptable:bool, data:&Vec<u8>) ->
-      Option<(String,String)> {
-        if sniff_scriptable {
-            let tp = self.scriptable_classifier.classify(data);
-            if tp.is_some() {return tp;}
-        }
-
-        let tp = self.plaintext_classifier.classify(data);
-        if tp.is_some() {return tp;}
-
-        let tp = self.image_classifier.classify(data);
-        if tp.is_some() {return tp;}
-
-        let tp = self.audio_video_classifer.classify(data);
-        if tp.is_some() {return tp;}
-
-        let tp = self.archive_classifer.classify(data);
-        if tp.is_some() {return tp;}
-
-        self.binary_or_plaintext.classify(data)
-    }
-
-    fn sniff_text_or_data(&self,data:&Vec<u8>) -> Option<(String, String)> {
-        self.binary_or_plaintext.classify(data)
-    }
-    fn is_xml(tp:&str,sub_tp:&str) -> bool {
-        match (tp,sub_tp,sub_tp.slice_from(max((sub_tp.len() as int) - ("+xml".len() as int), 0i) as uint)) {
-            (_,_,"+xml") | ("application","xml",_) | ("text","xml",_) => {true}
-            _ => {false}
-      }
-    }
-    fn is_html(tp:&str,sub_tp:&str) -> bool { return tp=="text" && sub_tp=="html"; }
-
-    //Performs MIME Type Sniffing Algorithm (section 7)
-    pub fn classify(&self,
-                    no_sniff: bool,
-                    check_for_apache_bug: bool,
-                    supplied_type: &Option<(String,String)>,
-                    data:&Vec<u8>) -> Option<(String,String)> {
-
-        match *supplied_type{
-            None => {
-              return self.sniff_unknown_type(!no_sniff,data);
-            }
-            Some(ref tup) => {
-                let media_type = tup.ref0().as_slice();
-                let media_subtype = tup.ref1().as_slice();
-                match  (media_type,media_subtype) {
-                    ("uknown","unknown") | ("application","uknown") | ("*","*") => {
-                        return self.sniff_unknown_type(!no_sniff,data);
-                    }
-                    _ => {
-                        if no_sniff {return supplied_type.clone();}
-                        if check_for_apache_bug {
-                          return self.sniff_text_or_data(data);
-                        }
-
-                        if MIMEClassifier::is_xml(media_type,media_subtype) { 
-                          return supplied_type.clone(); 
-                        }
-                        //Inplied in section 7.3, but flow is not clear
-                        if MIMEClassifier::is_html(media_type, media_subtype) { 
-                            return self.feeds_classifier.classify(data).
-                              or(supplied_type.clone()); 
-                         }
-
-                         if media_type == "image" {
-                           let tp = self.image_classifier.classify(data);
-                           if tp.is_some() { return tp;}
-                         }
-
-                         match (media_type,media_subtype) {
-                             ("audio",_) | ("video",_) | ("application","ogg") => {
-                                 let tp = self.audio_video_classifer.classify(data);
-                                 if tp.is_some() { return tp;}
-                             }
-                             _=> {}
-                         }
-                    }
-                }
-            }
-        }
-        return supplied_type.clone();
     }
 }
 
@@ -474,7 +492,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x00\x00\x01\x00",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("image","x-icon"),
+            content_type: ("image", "x-icon"),
             leading_ignore: []}
     }
     //A Windows Cursor signature.
@@ -482,7 +500,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x00\x00\x02\x00",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("image","x-icon"),
+            content_type: ("image", "x-icon"),
             leading_ignore: []
         }
     }
@@ -491,7 +509,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"BM",
             mask: b"\xFF\xFF",
-            content_type: ("image","bmp"),
+            content_type: ("image", "bmp"),
             leading_ignore: []
         }
     }
@@ -500,7 +518,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"GIF89a",
             mask: b"\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("image","gif"),
+            content_type: ("image", "gif"),
             leading_ignore: []
         }
     }
@@ -509,7 +527,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"GIF87a",
             mask: b"\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("image","gif"),
+            content_type: ("image", "gif"),
             leading_ignore: []
         }
     }
@@ -518,7 +536,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"RIFF\x00\x00\x00\x00WEBPVP",
             mask: b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00,\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("image","webp"),
+            content_type: ("image", "webp"),
             leading_ignore: []
         }
     }
@@ -528,7 +546,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x89PNG\r\n\x1A\n",
             mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("image","png"),
+            content_type: ("image", "png"),
             leading_ignore: []
         }
     }
@@ -537,7 +555,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\xFF\xD8\xFF",
             mask: b"\xFF\xFF\xFF",
-            content_type: ("image","jpeg"),
+            content_type: ("image", "jpeg"),
             leading_ignore: []
         }
     }
@@ -546,7 +564,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x1A\x45\xDF\xA3",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("video","webm"),
+            content_type: ("video", "webm"),
             leading_ignore: []
         }
     }
@@ -555,7 +573,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b".snd",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("audio","basic"),
+            content_type: ("audio", "basic"),
             leading_ignore: []
         }
     }
@@ -564,7 +582,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern:  b"FORM\x00\x00\x00\x00AIFF",
             mask:  b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
-            content_type: ("audio","aiff"),
+            content_type: ("audio", "aiff"),
             leading_ignore: []
         }
     }
@@ -573,7 +591,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"ID3",
             mask: b"\xFF\xFF\xFF",
-            content_type: ("audio","mpeg"),
+            content_type: ("audio", "mpeg"),
             leading_ignore: []
         }
     }
@@ -582,7 +600,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"OggS",
             mask: b"\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("application","ogg"),
+            content_type: ("application", "ogg"),
             leading_ignore: []
         }
     }
@@ -592,7 +610,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"MThd\x00\x00\x00\x06",
             mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("audio","midi"),
+            content_type: ("audio", "midi"),
             leading_ignore: []
         }
     }
@@ -601,7 +619,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"RIFF\x00\x00\x00\x00AVI ",
             mask: b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
-            content_type: ("video","avi"),
+            content_type: ("video", "avi"),
             leading_ignore: []
         }
     }
@@ -610,7 +628,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern:  b"RIFF\x00\x00\x00\x00WAVE",
             mask:  b"\xFF\xFF\xFF\xFF\x00\x00\x00\x00\xFF\xFF\xFF\xFF",
-            content_type: ("audio","wave"),
+            content_type: ("audio", "wave"),
             leading_ignore: []
         }
     }
@@ -620,7 +638,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern:  b"<!DOCTYPE HTML",
                 mask:  b"\xFF\xFF\xDF\xDF\xDF\xDF\xDF\xDF\xDF\xFF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
            }
         }
@@ -632,7 +650,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<HTML",
                 mask: b"\xFF\xDF\xDF\xDF\xDF\xFF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -644,7 +662,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<HEAD",
                 mask: b"\xFF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -656,7 +674,7 @@ impl ByteMatcher {
             matcher: ByteMatcher {
                 pattern: b"<SCRIPT",
                 mask: b"\xFF\xDF\xDF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore: b"\t\n\x0C\r "
             }
         }
@@ -668,7 +686,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<IFRAME",
                 mask: b"\xFF\xDF\xDF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore: b"\t\n\x0C\r "
             }
         }
@@ -680,7 +698,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<H1",
                 mask: b"\xFF\xDF\xFF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -692,7 +710,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<DIV",
                 mask: b"\xFF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -704,7 +722,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<FONT",
                 mask: b"\xFF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -716,7 +734,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
             pattern: b"<TABLE",
             mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
-            content_type: ("text","html"),
+            content_type: ("text", "html"),
             leading_ignore: b"\t\n\x0C\r "
             }
         }
@@ -728,7 +746,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<A",
                 mask: b"\xFF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -740,7 +758,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<STYLE",
                 mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -752,7 +770,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<TITLE",
                 mask: b"\xFF\xDF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -764,7 +782,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<B",
                 mask: b"\xFF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -776,7 +794,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<BODY",
                 mask: b"\xFF\xDF\xDF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -788,7 +806,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<BR",
                 mask: b"\xFF\xDF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -800,7 +818,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<P",
                 mask: b"\xFF\xDF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -812,7 +830,7 @@ impl ByteMatcher {
             matcher: ByteMatcher{
                 pattern: b"<!--",
                 mask: b"\xFF\xFF\xFF\xFF",
-                content_type: ("text","html"),
+                content_type: ("text", "html"),
                 leading_ignore:  b"\t\n\x0C\r "
             }
         }
@@ -823,7 +841,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"<?xml",
             mask: b"\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("text","xml"),
+            content_type: ("text", "xml"),
             leading_ignore: b"\t\n\x0C\r "
      }
     }
@@ -832,7 +850,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"%PDF",
             mask: b"\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("application","pdf"),
+            content_type: ("application", "pdf"),
             leading_ignore: []
         }
     }
@@ -847,7 +865,7 @@ impl ByteMatcher {
             mask: b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
                     \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
                     \x00\x00\xFF\xFF",
-            content_type: ("application","vnd.ms-fontobject"),
+            content_type: ("application", "vnd.ms-fontobject"),
             leading_ignore: []
         }
     }
@@ -858,7 +876,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x00\x01\x00\x00",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("(TrueType)",""),
+            content_type: ("(TrueType)", ""),
             leading_ignore: []
         }
     }
@@ -869,7 +887,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"OTTO",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("(OpenType)",""),
+            content_type: ("(OpenType)", ""),
             leading_ignore: []
         }
     }
@@ -880,7 +898,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"ttcf",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("(TrueType Collection)",""),
+            content_type: ("(TrueType Collection)", ""),
             leading_ignore: []
         }
     }
@@ -891,7 +909,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"wOFF",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("application","font-woff"),
+            content_type: ("application", "font-woff"),
             leading_ignore: []
         }
     }
@@ -900,7 +918,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\x1F\x8B\x08",
             mask: b"\xFF\xFF\xFF",
-            content_type: ("application","x-gzip"),
+            content_type: ("application", "x-gzip"),
             leading_ignore: []
         }
     }
@@ -909,7 +927,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"PK\x03\x04",
             mask: b"\xFF\xFF\xFF\xFF",
-            content_type: ("application","zip"),
+            content_type: ("application", "zip"),
             leading_ignore: []
         }
     }
@@ -918,7 +936,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"Rar \x1A\x07\x00",
             mask: b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("application","x-rar-compressed"),
+            content_type: ("application", "x-rar-compressed"),
             leading_ignore: []
         }
     }
@@ -927,7 +945,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"%!PS-Adobe-",
             mask:  b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
-            content_type: ("application","postscript"),
+            content_type: ("application", "postscript"),
             leading_ignore: []
         }
     }
@@ -936,7 +954,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\xFE\xFF\x00\x00",
             mask: b"\xFF\xFF\x00\x00",
-            content_type: ("text","plain"),
+            content_type: ("text", "plain"),
             leading_ignore: []
         }
     }
@@ -945,7 +963,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\xFF\xFE\x00\x00",
             mask: b"\xFF\xFF\x00\x00",
-            content_type: ("text","plain"),
+            content_type: ("text", "plain"),
             leading_ignore: []
         }
     }
@@ -954,7 +972,7 @@ impl ByteMatcher {
         ByteMatcher{
             pattern: b"\xEF\xBB\xBF\x00",
             mask: b"\xFF\xFF\xFF\x00",
-            content_type: ("text","plain"),
+            content_type: ("text", "plain"),
             leading_ignore: []
         }
     }
@@ -988,8 +1006,8 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn test_sniff_full(filename_orig:&Path,type_string:&str,subtype_string:&str,
-                                supplied_type:Option<(&'static str,&'static str)>){
+    fn test_sniff_full(filename_orig: &Path,type_string: &str,subtype_string: &str,
+                                supplied_type: Option<(&'static str,&'static str)>){
         let current_working_directory = os::getcwd();
         println!("The current directory is {}", current_working_directory.display());
 
@@ -1006,7 +1024,7 @@ mod tests {
             Ok(data) => {
                 match classifier.classify(false,false,&as_string_option(supplied_type),&data)
                 {
-                    Some(mime)=>{
+                    Some(mime) => {
                         let parsed_type=mime.ref0().as_slice();
                         let parsed_subtp=mime.ref1().as_slice();
                          if (parsed_type!=type_string)||
@@ -1016,7 +1034,7 @@ mod tests {
                                 parsed_subtp);
                         }
                     }
-                    None=>{panic!("No classification found for {} with supplied type {}",filename.as_str(),supplied_type);}
+                    None => {panic!("No classification found for {} with supplied type {}",filename.as_str(),supplied_type);}
                 }
             }
             Err(e) => {panic!("Couldn't read from file {} with error {}",filename.as_str(),e);}
@@ -1024,8 +1042,8 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn test_sniff_classification(file:&str,type_string:&str,subtype_string:&str,
-                           supplied_type:Option<(&'static str,&'static str)>){
+    fn test_sniff_classification(file: &str,type_string: &str,subtype_string: &str,
+                           supplied_type: Option<(&'static str,&'static str)>){
         let mut x = Path::new("./");
         x.push(type_string);
         x.push(subtype_string);
@@ -1033,367 +1051,367 @@ mod tests {
         test_sniff_full(&x,type_string,subtype_string,supplied_type);
     }
     #[cfg(test)]
-    fn test_sniff_classification_sup(file:&str,type_string:&'static str,subtype_string:&str) {
+    fn test_sniff_classification_sup(file: &str,type_string: &'static str,subtype_string: &str) {
         test_sniff_classification(file,type_string,subtype_string,None);
-        let class_type = Some((type_string,""));
+        let class_type = Some((type_string, ""));
         test_sniff_classification(file,type_string,subtype_string,class_type);
     }
         
     #[test]
     fn test_sniff_x_icon() {
-        test_sniff_classification_sup("test.ico","image","x-icon");
+        test_sniff_classification_sup("test.ico", "image", "x-icon");
     }
 
     #[test]
     fn test_sniff_x_icon_cursor() {
-     test_sniff_classification_sup("test_cursor.ico","image","x-icon");
+        test_sniff_classification_sup("test_cursor.ico", "image", "x-icon");
     }
 
     #[test]
     fn test_sniff_bmp() {
-        test_sniff_classification_sup("test.bmp","image","bmp");
+        test_sniff_classification_sup("test.bmp", "image", "bmp");
     }
 
     #[test]
     fn test_sniff_gif87a() {
-        test_sniff_classification_sup("test87a.gif","image","gif");
+        test_sniff_classification_sup("test87a.gif", "image", "gif");
     }
 
     #[test]
     fn test_sniff_gif89a() {
-        test_sniff_classification_sup("test89a.gif","image","gif");
+        test_sniff_classification_sup("test89a.gif", "image", "gif");
     }
 
     #[test]
     fn test_sniff_webp() {
-        test_sniff_classification_sup("test.webp","image","webp");
+        test_sniff_classification_sup("test.webp", "image", "webp");
     }
 
     #[test]
     fn test_sniff_png() {
-        test_sniff_classification_sup("test.png","image","png");
+        test_sniff_classification_sup("test.png", "image", "png");
     }
 
     #[test]
     fn test_sniff_jpg() {
-        test_sniff_classification_sup("test.jpg","image","jpeg");
+        test_sniff_classification_sup("test.jpg", "image", "jpeg");
     }
 
     #[test]
     fn test_sniff_webm() {
-        test_sniff_classification_sup("test.webm","video","webm");
+        test_sniff_classification_sup("test.webm", "video", "webm");
     }
 
     #[test]
     fn test_sniff_mp4() {
-        test_sniff_classification_sup("test.mp4","video","mp4");
+        test_sniff_classification_sup("test.mp4", "video", "mp4");
     }
 
     #[test]
     fn test_sniff_avi() {
-        test_sniff_classification_sup("test.avi","video","avi");
+        test_sniff_classification_sup("test.avi", "video", "avi");
     }
 
     #[test]
     fn test_sniff_basic() {
-        test_sniff_classification_sup("test.au","audio","basic");
+        test_sniff_classification_sup("test.au", "audio", "basic");
     }
 
     #[test]
     fn test_sniff_aiff() {
-        test_sniff_classification_sup("test.aif","audio","aiff");
+        test_sniff_classification_sup("test.aif", "audio", "aiff");
     }
 
     #[test]
     fn test_sniff_mpeg() {
-        test_sniff_classification_sup("test.mp3","audio","mpeg");
+        test_sniff_classification_sup("test.mp3", "audio", "mpeg");
     }
 
     #[test]
     fn test_sniff_midi() {
-        test_sniff_classification_sup("test.mid","audio","midi");
+        test_sniff_classification_sup("test.mid", "audio", "midi");
     }
 
     #[test]
     fn test_sniff_wave() {
-        test_sniff_classification_sup("test.wav","audio","wave");
+        test_sniff_classification_sup("test.wav", "audio", "wave");
     }
 
     #[test]
     fn test_sniff_ogg() {
-        test_sniff_classification("small.ogg","application","ogg",None);
-        test_sniff_classification("small.ogg","application","ogg",Some(("audio","")));
+        test_sniff_classification("small.ogg", "application", "ogg",None);
+        test_sniff_classification("small.ogg", "application", "ogg",Some(("audio", "")));
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_vsn_ms_fontobject() {
-        test_sniff_classification_sup("vnd.ms-fontobject","application","vnd.ms-fontobject");
+        test_sniff_classification_sup("vnd.ms-fontobject", "application", "vnd.ms-fontobject");
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_true_type() {
-        test_sniff_full(&Path::new("unknown/true_type.ttf"),"(TrueType)","",None);
+        test_sniff_full(&Path::new("unknown/true_type.ttf"), "(TrueType)", "",None);
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_open_type() {
-        test_sniff_full(&Path::new("unknown/open_type"),"(OpenType)","",None);
+        test_sniff_full(&Path::new("unknown/open_type"), "(OpenType)", "",None);
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_true_type_collection() {
-        test_sniff_full(&Path::new("unknown/true_type_collection.ttc"),"(TrueType Collection)","",None);
+        test_sniff_full(&Path::new("unknown/true_type_collection.ttc"), "(TrueType Collection)", "",None);
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_woff() {
-        test_sniff_classification_sup("test.wof","application","font-woff");
+        test_sniff_classification_sup("test.wof", "application", "font-woff");
     }
 
     #[test]
     fn test_sniff_gzip() {
-        test_sniff_classification("test.gz","application","x-gzip",None);
+        test_sniff_classification("test.gz", "application", "x-gzip",None);
     }
 
     #[test]
     fn test_sniff_zip() {
-        test_sniff_classification("test.zip","application","zip",None);
+        test_sniff_classification("test.zip", "application", "zip",None);
     }
 
     #[test]
     fn test_sniff_rar() {
-        test_sniff_classification("test.rar","application","x-rar-compressed",None);
+        test_sniff_classification("test.rar", "application", "x-rar-compressed",None);
     }
 
     #[test]
     fn test_sniff_text_html_doctype_20() {
-        test_sniff_classification("text_html_doctype_20.html","text","html",None);
-        test_sniff_classification("text_html_doctype_20_u.html","text","html",None);
+        test_sniff_classification("text_html_doctype_20.html", "text", "html",None);
+        test_sniff_classification("text_html_doctype_20_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_doctype_3e() {
-        test_sniff_classification("text_html_doctype_3e.html","text","html",None);
-        test_sniff_classification("text_html_doctype_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_doctype_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_doctype_3e_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_page_20() {
-        test_sniff_classification("text_html_page_20.html","text","html",None);
-        test_sniff_classification("text_html_page_20_u.html","text","html",None);
+        test_sniff_classification("text_html_page_20.html", "text", "html",None);
+        test_sniff_classification("text_html_page_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_page_3e() {
-        test_sniff_classification("text_html_page_3e.html","text","html",None);
-        test_sniff_classification("text_html_page_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_page_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_page_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_head_20() {
-        test_sniff_classification("text_html_head_20.html","text","html",None);
-        test_sniff_classification("text_html_head_20_u.html","text","html",None);
+        test_sniff_classification("text_html_head_20.html", "text", "html",None);
+        test_sniff_classification("text_html_head_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_head_3e() {
-        test_sniff_classification("text_html_head_3e.html","text","html",None);
-        test_sniff_classification("text_html_head_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_head_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_head_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_script_20() {
-        test_sniff_classification("text_html_script_20.html","text","html",None);
-        test_sniff_classification("text_html_script_20_u.html","text","html",None);
+        test_sniff_classification("text_html_script_20.html", "text", "html",None);
+        test_sniff_classification("text_html_script_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_script_3e() {
-        test_sniff_classification("text_html_script_3e.html","text","html",None);
-        test_sniff_classification("text_html_script_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_script_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_script_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_iframe_20() {
-        test_sniff_classification("text_html_iframe_20.html","text","html",None);
-        test_sniff_classification("text_html_iframe_20_u.html","text","html",None);
+        test_sniff_classification("text_html_iframe_20.html", "text", "html",None);
+        test_sniff_classification("text_html_iframe_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_iframe_3e() {
-        test_sniff_classification("text_html_iframe_3e.html","text","html",None);
-        test_sniff_classification("text_html_iframe_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_iframe_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_iframe_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_h1_20() {
-        test_sniff_classification("text_html_h1_20.html","text","html",None);
-        test_sniff_classification("text_html_h1_20_u.html","text","html",None);
+        test_sniff_classification("text_html_h1_20.html", "text", "html",None);
+        test_sniff_classification("text_html_h1_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_h1_3e() {
-        test_sniff_classification("text_html_h1_3e.html","text","html",None);
-        test_sniff_classification("text_html_h1_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_h1_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_h1_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_div_20() {
-        test_sniff_classification("text_html_div_20.html","text","html",None);
-        test_sniff_classification("text_html_div_20_u.html","text","html",None);
+        test_sniff_classification("text_html_div_20.html", "text", "html",None);
+        test_sniff_classification("text_html_div_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_div_3e() {
-        test_sniff_classification("text_html_div_3e.html","text","html",None);
-        test_sniff_classification("text_html_div_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_div_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_div_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_font_20() {
-        test_sniff_classification("text_html_font_20.html","text","html",None);
-        test_sniff_classification("text_html_font_20_u.html","text","html",None);
+        test_sniff_classification("text_html_font_20.html", "text", "html",None);
+        test_sniff_classification("text_html_font_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_font_3e() {
-        test_sniff_classification("text_html_font_3e.html","text","html",None);
-        test_sniff_classification("text_html_font_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_font_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_font_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_table_20() {
-        test_sniff_classification("text_html_table_20.html","text","html",None);
-        test_sniff_classification("text_html_table_20_u.html","text","html",None);
+        test_sniff_classification("text_html_table_20.html", "text", "html",None);
+        test_sniff_classification("text_html_table_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_table_3e() {
-        test_sniff_classification("text_html_table_3e.html","text","html",None);
-        test_sniff_classification("text_html_table_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_table_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_table_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_a_20() {
-        test_sniff_classification("text_html_a_20.html","text","html",None);
-        test_sniff_classification("text_html_a_20_u.html","text","html",None);
+        test_sniff_classification("text_html_a_20.html", "text", "html",None);
+        test_sniff_classification("text_html_a_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_a_3e() {
-        test_sniff_classification("text_html_a_3e.html","text","html",None);
-        test_sniff_classification("text_html_a_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_a_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_a_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_style_20() {
-        test_sniff_classification("text_html_style_20.html","text","html",None);
-        test_sniff_classification("text_html_style_20_u.html","text","html",None);
+        test_sniff_classification("text_html_style_20.html", "text", "html",None);
+        test_sniff_classification("text_html_style_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_style_3e() {
-        test_sniff_classification("text_html_style_3e.html","text","html",None);
-        test_sniff_classification("text_html_style_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_style_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_style_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_title_20() {
-        test_sniff_classification("text_html_title_20.html","text","html",None);
-        test_sniff_classification("text_html_title_20_u.html","text","html",None);
+        test_sniff_classification("text_html_title_20.html", "text", "html",None);
+        test_sniff_classification("text_html_title_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_title_3e() {
-        test_sniff_classification("text_html_title_3e.html","text","html",None);
-        test_sniff_classification("text_html_title_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_title_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_title_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_b_20() {
-        test_sniff_classification("text_html_b_20.html","text","html",None);
-        test_sniff_classification("text_html_b_20_u.html","text","html",None);
+        test_sniff_classification("text_html_b_20.html", "text", "html",None);
+        test_sniff_classification("text_html_b_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_b_3e() {
-        test_sniff_classification("text_html_b_3e.html","text","html",None);
-        test_sniff_classification("text_html_b_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_b_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_b_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_body_20() {
-        test_sniff_classification("text_html_body_20.html","text","html",None);
-        test_sniff_classification("text_html_body_20_u.html","text","html",None);
+        test_sniff_classification("text_html_body_20.html", "text", "html",None);
+        test_sniff_classification("text_html_body_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_body_3e() {
-        test_sniff_classification("text_html_body_3e.html","text","html",None);
-        test_sniff_classification("text_html_body_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_body_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_body_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_br_20() {
-        test_sniff_classification("text_html_br_20.html","text","html",None);
-        test_sniff_classification("text_html_br_20_u.html","text","html",None);
+        test_sniff_classification("text_html_br_20.html", "text", "html",None);
+        test_sniff_classification("text_html_br_20_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_br_3e() {
-        test_sniff_classification("text_html_br_3e.html","text","html",None);
-        test_sniff_classification("text_html_br_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_br_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_br_3e_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_p_20() {
-        test_sniff_classification("text_html_p_20.html","text","html",None);
-        test_sniff_classification("text_html_p_20_u.html","text","html",None);
+        test_sniff_classification("text_html_p_20.html", "text", "html",None);
+        test_sniff_classification("text_html_p_20_u.html", "text", "html",None);
     }
     #[test]
     fn test_sniff_text_html_p_3e() {
-        test_sniff_classification("text_html_p_3e.html","text","html",None);
-        test_sniff_classification("text_html_p_3e_u.html","text","html",None);
+        test_sniff_classification("text_html_p_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_p_3e_u.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_comment_20() {
-        test_sniff_classification("text_html_comment_20.html","text","html",None);
+        test_sniff_classification("text_html_comment_20.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_text_html_comment_3e() {
-        test_sniff_classification("text_html_comment_3e.html","text","html",None);
+        test_sniff_classification("text_html_comment_3e.html", "text", "html",None);
     }
 
     #[test]
     fn test_sniff_xml() {
-        test_sniff_classification("test.xml","text","xml",None);
+        test_sniff_classification("test.xml", "text", "xml",None);
     }
 
     #[test]
     fn test_sniff_pdf() {
-        test_sniff_classification("test.pdf","application","pdf",None);
+        test_sniff_classification("test.pdf", "application", "pdf",None);
     }
 
     #[test]
     fn test_sniff_postscript() {
-        test_sniff_classification("test.ps","application","postscript",None);
+        test_sniff_classification("test.ps", "application", "postscript",None);
     }
 
     #[test]
     fn test_sniff_utf_16be_bom() {
-        test_sniff_classification("utf16bebom.txt","text","plain",None);
+        test_sniff_classification("utf16bebom.txt", "text", "plain",None);
     }
 
     #[test]
     fn test_sniff_utf_16le_bom() {
-        test_sniff_classification("utf16lebom.txt","text","plain",None);
+        test_sniff_classification("utf16lebom.txt", "text", "plain",None);
     }
 
     #[test]
     fn test_sniff_utf_8_bom() {
-        test_sniff_classification("utf8bom.txt","text","plain",None);
+        test_sniff_classification("utf8bom.txt", "text", "plain",None);
     }
 
     #[test]
     fn test_sniff_rss_feed() {
-        test_sniff_full(&Path::new("text/xml/feed.rss"),"application","rss+xml",Some(("text","html")));
+        test_sniff_full(&Path::new("text/xml/feed.rss"), "application", "rss+xml",Some(("text", "html")));
     }
 
     #[test]
     fn test_sniff_atom_feed() {
-        test_sniff_full(&Path::new("text/xml/feed.atom"),"application","atom+xml",Some(("text","html")));
+        test_sniff_full(&Path::new("text/xml/feed.atom"), "application", "atom+xml",Some(("text", "html")));
     }
 }
 
