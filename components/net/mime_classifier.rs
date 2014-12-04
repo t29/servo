@@ -110,7 +110,7 @@ impl MIMEClassifier {
       }
     }
     fn is_html(tp: &str, sub_tp: &str) -> bool {
-        return tp=="text" && sub_tp=="html";
+        tp=="text" && sub_tp=="html"
     }
 }
 
@@ -179,10 +179,14 @@ impl ByteMatcher {
         let max_i = data.len()-self.pattern.len();
 
         loop {
-            if !self.leading_ignore.iter().any(|x| *x == data[i]) { break;}
+            if !self.leading_ignore.iter().any(|x| *x == data[i]) {
+                break;
+            }
 
             i=i + 1;
-            if i > max_i {return None;}
+            if i > max_i {
+                return None;
+            }
         }
         for j in range(0u,self.pattern.len()) {           
             if (data[i] & self.mask[j]) != (self.pattern[j] & self.mask[j]) { 
@@ -1052,7 +1056,7 @@ mod tests {
     }
     #[cfg(test)]
     fn test_sniff_classification_sup(file: &str,type_string: &'static str,subtype_string: &str) {
-        test_sniff_classification(file,type_string,subtype_string,None);
+        test_sniff_classification(file,type_string,subtype_string, None);
         let class_type = Some((type_string, ""));
         test_sniff_classification(file,type_string,subtype_string,class_type);
     }
@@ -1139,8 +1143,8 @@ mod tests {
 
     #[test]
     fn test_sniff_ogg() {
-        test_sniff_classification("small.ogg", "application", "ogg",None);
-        test_sniff_classification("small.ogg", "application", "ogg",Some(("audio", "")));
+        test_sniff_classification("small.ogg", "application", "ogg", None);
+        test_sniff_classification("small.ogg", "application", "ogg", Some(("audio", "")));
     }
 
     #[test]
@@ -1152,19 +1156,19 @@ mod tests {
     #[test]
     #[should_fail]
     fn test_sniff_true_type() {
-        test_sniff_full(&Path::new("unknown/true_type.ttf"), "(TrueType)", "",None);
+        test_sniff_full(&Path::new("unknown/true_type.ttf"), "(TrueType)", "", None);
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_open_type() {
-        test_sniff_full(&Path::new("unknown/open_type"), "(OpenType)", "",None);
+        test_sniff_full(&Path::new("unknown/open_type"), "(OpenType)", "", None);
     }
 
     #[test]
     #[should_fail]
     fn test_sniff_true_type_collection() {
-        test_sniff_full(&Path::new("unknown/true_type_collection.ttc"), "(TrueType Collection)", "",None);
+        test_sniff_full(&Path::new("unknown/true_type_collection.ttc"), "(TrueType Collection)", "", None);
     }
 
     #[test]
@@ -1175,243 +1179,243 @@ mod tests {
 
     #[test]
     fn test_sniff_gzip() {
-        test_sniff_classification("test.gz", "application", "x-gzip",None);
+        test_sniff_classification("test.gz", "application", "x-gzip", None);
     }
 
     #[test]
     fn test_sniff_zip() {
-        test_sniff_classification("test.zip", "application", "zip",None);
+        test_sniff_classification("test.zip", "application", "zip", None);
     }
 
     #[test]
     fn test_sniff_rar() {
-        test_sniff_classification("test.rar", "application", "x-rar-compressed",None);
+        test_sniff_classification("test.rar", "application", "x-rar-compressed", None);
     }
 
     #[test]
     fn test_sniff_text_html_doctype_20() {
-        test_sniff_classification("text_html_doctype_20.html", "text", "html",None);
-        test_sniff_classification("text_html_doctype_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_doctype_20.html", "text", "html", None);
+        test_sniff_classification("text_html_doctype_20_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_doctype_3e() {
-        test_sniff_classification("text_html_doctype_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_doctype_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_doctype_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_doctype_3e_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_page_20() {
-        test_sniff_classification("text_html_page_20.html", "text", "html",None);
-        test_sniff_classification("text_html_page_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_page_20.html", "text", "html", None);
+        test_sniff_classification("text_html_page_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_page_3e() {
-        test_sniff_classification("text_html_page_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_page_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_page_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_page_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_head_20() {
-        test_sniff_classification("text_html_head_20.html", "text", "html",None);
-        test_sniff_classification("text_html_head_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_head_20.html", "text", "html", None);
+        test_sniff_classification("text_html_head_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_head_3e() {
-        test_sniff_classification("text_html_head_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_head_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_head_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_head_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_script_20() {
-        test_sniff_classification("text_html_script_20.html", "text", "html",None);
-        test_sniff_classification("text_html_script_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_script_20.html", "text", "html", None);
+        test_sniff_classification("text_html_script_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_script_3e() {
-        test_sniff_classification("text_html_script_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_script_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_script_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_script_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_iframe_20() {
-        test_sniff_classification("text_html_iframe_20.html", "text", "html",None);
-        test_sniff_classification("text_html_iframe_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_iframe_20.html", "text", "html", None);
+        test_sniff_classification("text_html_iframe_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_iframe_3e() {
-        test_sniff_classification("text_html_iframe_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_iframe_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_iframe_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_iframe_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_h1_20() {
-        test_sniff_classification("text_html_h1_20.html", "text", "html",None);
-        test_sniff_classification("text_html_h1_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_h1_20.html", "text", "html", None);
+        test_sniff_classification("text_html_h1_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_h1_3e() {
-        test_sniff_classification("text_html_h1_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_h1_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_h1_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_h1_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_div_20() {
-        test_sniff_classification("text_html_div_20.html", "text", "html",None);
-        test_sniff_classification("text_html_div_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_div_20.html", "text", "html", None);
+        test_sniff_classification("text_html_div_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_div_3e() {
-        test_sniff_classification("text_html_div_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_div_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_div_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_div_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_font_20() {
-        test_sniff_classification("text_html_font_20.html", "text", "html",None);
-        test_sniff_classification("text_html_font_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_font_20.html", "text", "html", None);
+        test_sniff_classification("text_html_font_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_font_3e() {
-        test_sniff_classification("text_html_font_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_font_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_font_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_font_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_table_20() {
-        test_sniff_classification("text_html_table_20.html", "text", "html",None);
-        test_sniff_classification("text_html_table_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_table_20.html", "text", "html", None);
+        test_sniff_classification("text_html_table_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_table_3e() {
-        test_sniff_classification("text_html_table_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_table_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_table_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_table_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_a_20() {
-        test_sniff_classification("text_html_a_20.html", "text", "html",None);
-        test_sniff_classification("text_html_a_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_a_20.html", "text", "html", None);
+        test_sniff_classification("text_html_a_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_a_3e() {
-        test_sniff_classification("text_html_a_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_a_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_a_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_a_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_style_20() {
-        test_sniff_classification("text_html_style_20.html", "text", "html",None);
-        test_sniff_classification("text_html_style_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_style_20.html", "text", "html", None);
+        test_sniff_classification("text_html_style_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_style_3e() {
-        test_sniff_classification("text_html_style_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_style_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_style_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_style_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_title_20() {
-        test_sniff_classification("text_html_title_20.html", "text", "html",None);
-        test_sniff_classification("text_html_title_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_title_20.html", "text", "html", None);
+        test_sniff_classification("text_html_title_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_title_3e() {
-        test_sniff_classification("text_html_title_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_title_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_title_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_title_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_b_20() {
-        test_sniff_classification("text_html_b_20.html", "text", "html",None);
-        test_sniff_classification("text_html_b_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_b_20.html", "text", "html", None);
+        test_sniff_classification("text_html_b_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_b_3e() {
-        test_sniff_classification("text_html_b_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_b_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_b_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_b_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_body_20() {
-        test_sniff_classification("text_html_body_20.html", "text", "html",None);
-        test_sniff_classification("text_html_body_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_body_20.html", "text", "html", None);
+        test_sniff_classification("text_html_body_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_body_3e() {
-        test_sniff_classification("text_html_body_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_body_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_body_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_body_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_br_20() {
-        test_sniff_classification("text_html_br_20.html", "text", "html",None);
-        test_sniff_classification("text_html_br_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_br_20.html", "text", "html", None);
+        test_sniff_classification("text_html_br_20_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_br_3e() {
-        test_sniff_classification("text_html_br_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_br_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_br_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_br_3e_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_p_20() {
-        test_sniff_classification("text_html_p_20.html", "text", "html",None);
-        test_sniff_classification("text_html_p_20_u.html", "text", "html",None);
+        test_sniff_classification("text_html_p_20.html", "text", "html", None);
+        test_sniff_classification("text_html_p_20_u.html", "text", "html", None);
     }
     #[test]
     fn test_sniff_text_html_p_3e() {
-        test_sniff_classification("text_html_p_3e.html", "text", "html",None);
-        test_sniff_classification("text_html_p_3e_u.html", "text", "html",None);
+        test_sniff_classification("text_html_p_3e.html", "text", "html", None);
+        test_sniff_classification("text_html_p_3e_u.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_comment_20() {
-        test_sniff_classification("text_html_comment_20.html", "text", "html",None);
+        test_sniff_classification("text_html_comment_20.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_text_html_comment_3e() {
-        test_sniff_classification("text_html_comment_3e.html", "text", "html",None);
+        test_sniff_classification("text_html_comment_3e.html", "text", "html", None);
     }
 
     #[test]
     fn test_sniff_xml() {
-        test_sniff_classification("test.xml", "text", "xml",None);
+        test_sniff_classification("test.xml", "text", "xml", None);
     }
 
     #[test]
     fn test_sniff_pdf() {
-        test_sniff_classification("test.pdf", "application", "pdf",None);
+        test_sniff_classification("test.pdf", "application", "pdf", None);
     }
 
     #[test]
     fn test_sniff_postscript() {
-        test_sniff_classification("test.ps", "application", "postscript",None);
+        test_sniff_classification("test.ps", "application", "postscript", None);
     }
 
     #[test]
     fn test_sniff_utf_16be_bom() {
-        test_sniff_classification("utf16bebom.txt", "text", "plain",None);
+        test_sniff_classification("utf16bebom.txt", "text", "plain", None);
     }
 
     #[test]
     fn test_sniff_utf_16le_bom() {
-        test_sniff_classification("utf16lebom.txt", "text", "plain",None);
+        test_sniff_classification("utf16lebom.txt", "text", "plain", None);
     }
 
     #[test]
     fn test_sniff_utf_8_bom() {
-        test_sniff_classification("utf8bom.txt", "text", "plain",None);
+        test_sniff_classification("utf8bom.txt", "text", "plain", None);
     }
 
     #[test]
     fn test_sniff_rss_feed() {
-        test_sniff_full(&Path::new("text/xml/feed.rss"), "application", "rss+xml",Some(("text", "html")));
+        test_sniff_full(&Path::new("text/xml/feed.rss"), "application", "rss+xml", Some(("text", "html")));
     }
 
     #[test]
     fn test_sniff_atom_feed() {
-        test_sniff_full(&Path::new("text/xml/feed.atom"), "application", "atom+xml",Some(("text", "html")));
+        test_sniff_full(&Path::new("text/xml/feed.atom"), "application", "atom+xml", Some(("text", "html")));
     }
 }
 
