@@ -14,6 +14,7 @@ use devtools_traits::{ActorValue, DevtoolScriptControlMsg};
 use servo_msg::constellation_msg::PipelineId;
 
 use collections::TreeMap;
+use core::cell::RefCell;
 use serialize::json;
 use serialize::json::ToJson;
 use std::io::TcpStream;
@@ -105,6 +106,7 @@ pub struct ConsoleActor {
     pub name: String,
     pub pipeline: PipelineId,
     pub script_chan: Sender<DevtoolScriptControlMsg>,
+    pub streams: RefCell<Vec<TcpStream>>,
 }
 
 impl Actor for ConsoleActor {
@@ -116,8 +118,8 @@ impl Actor for ConsoleActor {
                       _registry: &ActorRegistry,
                       msg_type: &String,
                       msg: &json::JsonObject,
-                      stream: &mut TcpStream) -> bool {
-        match msg_type.as_slice() {
+                      stream: &mut TcpStream) -> Result<bool, ()> {
+        Ok(match msg_type.as_slice() {
             "getCachedMessages" => {
                 let types = msg.get(&"messageTypes".to_string()).unwrap().as_list().unwrap();
                 let /*mut*/ messages = vec!();
@@ -221,7 +223,7 @@ impl Actor for ConsoleActor {
                 self.script_chan.send(EvaluateJS(self.pipeline, input.clone(), chan));
 
                 //TODO: extract conversion into protocol module or some other useful place
-                let result = match port.recv() {
+                let result = match try!(port.recv_opt()) {
                     VoidValue => {
                         let mut m = TreeMap::new();
                         m.insert("type".to_string(), "undefined".to_string().to_json());
@@ -283,6 +285,6 @@ impl Actor for ConsoleActor {
             }
 
             _ => false
-        }
+        })
     }
 }
